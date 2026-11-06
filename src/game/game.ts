@@ -1,93 +1,210 @@
 import * as THREE from 'three'
 import type { Audio } from '../engine/audio'
 import type { Input } from '../engine/input'
-import { Physics, RAPIER } from '../engine/physics'
 import type { Renderer } from '../engine/renderer'
 import type { Quality } from '../engine/save'
-import { FollowCamera } from './camera'
-import { Collectibles } from './collectibles'
+import { makeAxe, HEAD_FRACTION } from './axe'
 import { CONFIG } from './config'
-import { tuning } from './tuning'
-import { Drones } from './drones'
-import { Effects } from './fx'
-import { Player, type PlayerEvent } from './player'
-import { collect, createRun, damage, tick, type RunState } from './rules'
-import { World } from './world'
+import { cutWoodMaterial, Effects, pieceGeometry, WoodPile } from './fx'
+import {
+  angleDelta, CHOP_DURATION, CHOP_IMPACT, chopTimeScale, lerp, nearestSpot, nextLanternLevel, nightAt,
+  PILE_CAPACITY, pushOutOfCircle, smooth, type LanternLevel, type Spot,
+} from './rules'
+import { Bar, Campfire, CAMPFIRE } from './props'
+import { Shrimp } from './shrimp'
+import { Tuna } from './tuna'
+import { duskEnvironment, LAYOUT, World, type Models } from './world'
 
-export type Mode = 'attract' | 'playing' | 'paused' | 'ended'
-export type Hint = 'move' | 'look' | 'jump' | 'dash' | 'cores'
-export type Compass = { angle: number; distance: number; rise: number }
+export type GameMode = 'title' | 'playing' | 'paused'
+type Activity = 'free' | 'chop' | 'sitIn' | 'sitting' | 'sitOut'
 
-export type GameHooks = {
-  popup(text: string, screen: { x: number; y: number }, kind: 'score' | 'hurt'): void
-  hurt(): void
-  hint(hint: Hint | null): void
-  /** The first-run tutorial reached its last step. */
-  tutorialDone(): void
-  end(run: RunState): void
+export type HudState = {
+  wood: number
+  night: number
+  prompt: string | null
+  sitting: boolean
+  zoneSeconds: number
 }
 
-/**
- * One playable scene: owns world, physics, player, camera, enemies and the run rules, and
- * translates simulation events into audio, particles and UI hooks. `main.ts` drives it from the
- * fixed-step loop; the UI never reaches inside.
- */
+export type GameEvents = {
+  toast(key: string): void
+  hint(key: string | null): void
+  zoneLine(key: string): void
+  cinematic(on: boolean): void
+  addWood(n: number): void
+  addZone(seconds: number): void
+}
+
+type Seat = { id: string; pos: THREE.Vector3; rootY: number; heading: number; standAt: THREE.Vector3; promptKey: string }
+
+type Half = {
+  group: THREE.Group
+  plane: THREE.Plane
+  normal: THREE.Vector3
+  side: 1 | -1
+  slot: number
+  start: THREE.Vector3
+  startQ: THREE.Quaternion
+  done: boolean
+}
+
+type Flyer = { mesh: THREE.Mesh; from: THREE.Vector3; slot: number; t: number; dur: number; fromQ: THREE.Quaternion; toQ: THREE.Quaternion }
+
+const tmpV = new THREE.Vector3()
+const tmpQ = new THREE.Quaternion()
+
 export class Game {
-  mode: Mode = 'attract'
-  run: RunState
+  mode: GameMode = 'title'
   reducedMotion = false
-  private readonly physics: Physics
+  readonly camera = new THREE.PerspectiveCamera(48, 1, 0.05, 900)
   private readonly world: World
-  private readonly player: Player
-  private readonly cam: FollowCamera
-  private readonly cores: Collectibles
-  private readonly drones: Drones
-  private readonly fx = new Effects()
-  private simTime = 0
-  private time = 0
-  private tutorial: Hint | null = null
-  private tutorialLook = 0
-  private tutorialStart = new THREE.Vector3()
-  private readonly down = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 })
+  private readonly fx: Effects
+  private readonly tuna: Tuna
+  private readonly shrimp: Shrimp
+  private readonly pile: WoodPile
+  private readonly axe: THREE.Group
+  private readonly axeStuck = new THREE.Matrix4()
+  private readonly seats: Seat[]
+  private activity: Activity = 'free'
+  private elapsed = 0
+  private night = 0
+  private velocity = new THREE.Vector3()
+  private vy = 0
+  private grounded = true
+  private land = 0
+  private sessionWood = 0
+  private reservedSlots = 0
+  private chopCount = 0
+  private shrimpImpacts = 0
+  private nightHintShown = false
+  private sitHintShown = false
+  // Chop
+  private ct = 0
+  private chopFrom = new THREE.Vector3()
+  private chopFromHeading = 0
+  private impactDone = false
+  private halves: Half[] = []
+  private newLogT = -1
+  private flyers: Flyer[] = []
+  private shake = 0
+  // Sitting
+  private seat?: Seat
+  private sitT = 0
+  private sitFrom = new THREE.Vector3()
+  private sitFromHeading = 0
+  private puffT = 4
+  private puffPhase: 'idle' | 'inhale' | 'hold' = 'idle'
+  private zoneLineT = 6
+  private zoneSession = 0
+  private wispT = 0
+  private walkPuffT = 10
+  // Camera
+  private camYaw = 0.25
+  private camPitch = 0.3
+  private camDist = CONFIG.camera.distance
+  private camPos = new THREE.Vector3(6, 3, 8)
+  private camLook = new THREE.Vector3(0, 1, -2)
+  private nearest: Spot | null = null
+  private readonly campfire: Campfire
+  private readonly bar: Bar
+  private readonly guitar: THREE.Group
+  private strumT = 0
+  private strumKick = 0
+  private readonly cutMat = cutWoodMaterial()
+  private readonly barkMat: THREE.Material
+  private readonly pieceGeo = pieceGeometry(0.15, 0.4)
 
-  constructor(
-    private readonly renderer: Renderer,
-    private readonly input: Input,
-    private readonly audio: Audio,
-    private readonly hooks: GameHooks,
-  ) {
-    this.physics = new Physics(CONFIG.player.gravity)
-    this.world = new World(this.physics, renderer.shadowMapSize)
-    this.player = new Player(this.physics, this.world.spawn, this.world.movers)
-    this.cam = new FollowCamera(this.physics, this.player.collider)
-    this.cores = new Collectibles(this.world.coreSpots)
-    this.drones = new Drones(this.physics, this.world.droneRoutes)
-    this.world.scene.add(this.player.root, this.player.shadowMesh, this.cores.group, this.drones.group, this.fx.mesh)
-    this.run = createRun(this.cores.total)
-    this.cam.reset(this.world.spawn, 0.6)
+  constructor(private readonly renderer: Renderer, private readonly input: Input, private readonly audio: Audio,
+    models: Models, private readonly events: GameEvents, quality: Quality, private readonly t: (k: string) => string) {
+    this.world = new World(models, quality)
+    const scene = this.world.scene
+    scene.environment = duskEnvironment(renderer.gl)
+    scene.environmentIntensity = 0.55
+    this.cutMat.map = ringTexture()
+
+    this.fx = new Effects(quality)
+    scene.add(this.fx.group)
+
+    this.tuna = new Tuna(models.tuna, models.boot)
+    this.tuna.root.position.set(1.2, 0, 2.6)
+    this.tuna.heading = Math.PI
+    this.tuna.onFootfall = (_side, strength) => {
+      if (this.activity === 'free' || this.activity === 'chop') this.audio.play('step', { volume: 0.45 * strength, jitter: 0.12 })
+    }
+    scene.add(this.tuna.root)
+
+    this.shrimp = new Shrimp(models.shrimp, models.axe, LAYOUT.shrimpBlock, 0.6, new THREE.Vector3(-1.75, 0, 0.15))
+    this.shrimp.onChopImpact = () => this.onShrimpImpact()
+    scene.add(this.shrimp.root)
+
+    this.axe = makeAxe(models.axe, 0.8)
+    this.axe.traverse(o => ((o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).castShadow = true) : undefined))
+    scene.add(this.axe)
+    // Stuck pose: blade bitten into the stump rim, handle angled up toward the player.
+    const stuck = new THREE.Object3D()
+    stuck.rotation.set(0.95, Math.PI + 0.5, 0, 'YXZ')
+    stuck.updateMatrix()
+    const headOffset = new THREE.Vector3(0, -0.02, 0.8 * HEAD_FRACTION).applyQuaternion(stuck.quaternion)
+    const bite = new THREE.Vector3(LAYOUT.stump.x + 0.28, LAYOUT.stumpTop - 0.05, LAYOUT.stump.z + 0.12)
+    stuck.position.copy(bite).sub(headOffset)
+    stuck.updateMatrix()
+    this.axeStuck.copy(stuck.matrix)
+    this.applyAxeMatrix(this.axeStuck)
+
+    let bark: THREE.Material | undefined
+    models.log.scene.traverse(o => {
+      if (!bark && (o as THREE.Mesh).isMesh) bark = (o as THREE.Mesh).material as THREE.Material
+    })
+    this.barkMat = bark ?? new THREE.MeshStandardMaterial({ color: 0x6b4a2e })
+    this.pile = new WoodPile(LAYOUT.pile, this.barkMat)
+    scene.add(this.pile.mesh)
+
+    this.seats = [
+      { id: 'rock', pos: LAYOUT.rockSeat.clone(), rootY: 0.56, heading: Math.PI, standAt: new THREE.Vector3(LAYOUT.rock.x + 0.2, 0, LAYOUT.rock.z - 1.25), promptKey: 'prompt.sit.rock' },
+      { id: 'fence', pos: LAYOUT.fenceSeat.clone(), rootY: 0.74, heading: Math.PI, standAt: new THREE.Vector3(LAYOUT.fenceSeat.x, 0, LAYOUT.fenceZ + 0.75), promptKey: 'prompt.sit.fence' },
+    ]
+    this.campfire = new Campfire(models, this.world.colliders)
+    scene.add(this.campfire.group)
+    this.bar = new Bar(this.world.colliders)
+    scene.add(this.bar.group)
+    this.seats.push({ id: 'campfire', pos: CAMPFIRE.seat.clone(), rootY: CAMPFIRE.seatTop - 0.02, heading: Math.PI,
+      standAt: new THREE.Vector3(CAMPFIRE.seat.x + 1.0, 0, CAMPFIRE.seat.z + 0.45), promptKey: 'prompt.sit.campfire' })
+    this.world.spots.push({ id: 'campfire', kind: 'sit', x: CAMPFIRE.seat.x, z: CAMPFIRE.seat.z + 0.25, reach: 1.25 })
+    this.guitar = makeGuitar(models.guitar)
+    this.guitar.visible = false
+    this.tuna.body.add(this.guitar)
+    this.world.update(0, 0, false)
   }
 
-  get camera(): THREE.PerspectiveCamera {
-    return this.cam.camera
+  get scene(): THREE.Scene {
+    return this.world.scene
   }
 
-  /** Begin (or restart) a run. `tutorial` shows first-time control hints. */
-  start(tutorial: boolean): void {
-    tuning.activate('run')
-    this.cores.reset()
-    this.fx.clear()
-    this.player.teleport(this.world.spawn)
-    this.player.facing = 0
-    this.cam.pitch = 0.42
-    this.cam.reset(this.world.spawn, 0)
-    this.run = { ...createRun(this.cores.total), unranked: tuning.unranked }
+  /** Read-only state for the HUD. */
+  hud(): HudState {
+    let prompt: string | null = null
+    if (this.activity === 'sitting') prompt = this.t('prompt.stand')
+    else if (this.activity === 'free' && this.nearest) prompt = this.promptFor(this.nearest)
+    return { wood: this.sessionWood, night: this.night, prompt, sitting: this.activity === 'sitting' || this.activity === 'sitIn', zoneSeconds: this.zoneSession }
+  }
+
+  /** Test/debug snapshot. */
+  debug(): Record<string, unknown> {
+    return { activity: this.activity, mode: this.mode, wood: this.sessionWood, pile: this.pile.count, night: this.night,
+      tuna: this.tuna.root.position.toArray(), shrimp: this.shrimp.state, lantern: this.world.lanternLevel, nearest: this.nearest?.id ?? null, ct: this.ct }
+  }
+
+  private promptFor(spot: Spot): string {
+    if (spot.kind === 'chop') return this.t('prompt.chop')
+    if (spot.kind === 'lantern') return this.t(this.world.lanternLevel === 0 ? 'prompt.lantern.on' : this.world.lanternLevel === 1 ? 'prompt.lantern.up' : 'prompt.lantern.off')
+    const seat = this.seats.find(s => s.id === spot.id)
+    return this.t(seat?.promptKey ?? 'prompt.sit.rock')
+  }
+
+  start(): void {
     this.mode = 'playing'
-    this.input.endFrame()
-    this.input.takeLook()
-    this.tutorial = tutorial ? 'move' : null
-    this.tutorialLook = 0
-    this.tutorialStart.copy(this.world.spawn)
-    this.hooks.hint(this.tutorial)
+    this.events.hint('hint.welcome')
+    window.setTimeout(() => this.events.hint(null), 9000)
   }
 
   pause(): void {
@@ -95,197 +212,705 @@ export class Game {
   }
 
   resume(): void {
-    if (this.mode !== 'paused') return
-    this.mode = 'playing'
-    this.input.endFrame()
-    this.input.takeLook()
+    if (this.mode === 'paused') this.mode = 'playing'
   }
 
   toTitle(): void {
-    this.mode = 'attract'
-    this.hooks.hint(null)
+    if (this.activity === 'sitting' || this.activity === 'sitIn') this.events.cinematic(false)
+    this.mode = 'title'
   }
 
-  setQuality(quality: Quality): void {
-    this.renderer.applyQuality(quality)
-    const size = this.renderer.shadowMapSize
-    const shadow = this.world.sun.shadow
-    shadow.map?.dispose()
-    shadow.map = null
-    shadow.mapSize.set(size, size)
-    // Shadow support is compiled into shaders: recompile after toggling shadows at runtime.
-    this.world.scene.traverse(obj => {
-      const material = (obj as THREE.Mesh).material
-      for (const m of Array.isArray(material) ? material : material ? [material] : []) m.needsUpdate = true
-    })
+  setQuality(q: Quality): void {
+    this.renderer.applyQuality(q)
   }
 
-  step(dt: number): void {
-    this.simTime += dt
-    // Presses are always consumed so a jump pressed in a menu never fires on resume.
-    const jumpPressed = this.input.consume('jump')
-    const dashPressed = this.input.consume('dash')
+  /** One rendered frame. Slow motion scales world time; UI and camera smoothing use real time. */
+  frame(realDt: number): void {
     const playing = this.mode === 'playing'
-    const rage = playing && this.run.timeLeft <= CONFIG.drones.rageAt
+    const paused = this.mode === 'paused'
+    let scale = 1
+    if (this.activity === 'chop') scale = chopTimeScale(this.ct, CONFIG.world.slowMotion)
+    const dt = paused ? 0 : realDt * scale
 
-    this.world.stepMovers(this.simTime)
-    const events: PlayerEvent[] = []
-    if (playing) {
-      this.player.step(
-        dt,
-        {
-          moveX: this.input.move.x,
-          moveY: this.input.move.y,
-          sprint: this.input.held('sprint'),
-          jumpPressed,
-          jumpHeld: this.input.held('jump'),
-          dashPressed,
-        },
-        this.cam.yaw,
-        events,
-      )
+    if (!paused) {
+      this.elapsed += dt
+      this.night = nightAt(this.elapsed, CONFIG.world.nightMinutes)
     }
-    this.drones.step(dt, rage)
-    this.physics.step(dt)
-    if (!playing) return
-    this.run.unranked ||= tuning.unranked
+    if (playing) this.updatePlay(dt, realDt)
+    else if (!paused) this.tuna.update(dt, 0, this.reducedMotion)
 
-    const pos = this.player.position
-    for (const e of events) this.onPlayerEvent(e, pos)
-
-    for (const at of this.cores.collect(pos, CONFIG.player.radius + 0.75)) {
-      const result = collect(this.run)
-      this.run = result.state
-      this.audio.play('pickup')
-      this.fx.burst(at, '#ffd35c', 26, 7)
-      const combo = this.run.combo > 1 ? `  ×${this.run.combo}` : ''
-      this.hooks.popup(`+${result.points}${combo}`, this.project(at), 'score')
-      if (this.tutorial === 'cores') {
-        this.advanceTutorial(null)
-        this.hooks.tutorialDone()
+    if (!paused) {
+      this.shrimp.update(dt, this.tuna.root.position)
+      this.world.update(dt, this.night, this.reducedMotion)
+      this.updateSmoke(dt)
+      this.updateFlyers(dt)
+      this.fx.update(dt, this.night, this.elapsed)
+      this.campfire.update(dt, this.night, p => this.fx.wisp(p, 3), (p, v) => this.fx.ember(p, v, 1.3))
+      this.bar.update(this.elapsed, this.night)
+      const fd = this.tuna.root.position.distanceTo(CAMPFIRE.pos)
+      this.audio.fire(playing ? Math.max(0, 1 - fd / 9) : 0.15, dt)
+      this.audio.setAmbience(0.45 + this.night * 0.55)
+      if (playing && !this.nightHintShown && this.night > 0.62 && this.world.lanternLevel < 2) {
+        this.nightHintShown = true
+        this.events.hint('hint.night')
+        window.setTimeout(() => this.events.hint(null), 8000)
       }
     }
+    this.updateCamera(realDt, dt)
+    this.fx.setViewportHeight(this.renderer.canvas.clientHeight || window.innerHeight, this.camera.fov)
+    this.campfire.setViewport((this.renderer.canvas.clientHeight || window.innerHeight) / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)))
+    this.renderer.render(this.world.scene, this.camera)
+  }
 
-    const hitFrom = this.drones.hits(pos, CONFIG.player.radius)[0]
-    if (hitFrom) {
-      const result = damage(this.run)
-      if (result.hurt) {
-        this.run = result.state
-        this.player.knockback(hitFrom)
-        this.onHurt(pos)
-      }
-    }
-
-    if (pos.y < CONFIG.run.killY) {
-      this.run = damage(this.run, true).state
-      this.onHurt(pos)
-      if (this.run.phase === 'playing') {
-        this.player.teleport(this.player.safe)
-        this.cam.reset(this.player.safe)
-      }
-    }
-
-    this.run = tick(this.run, dt)
-    this.updateTutorial(pos)
-    if (this.run.phase !== 'playing') {
-      this.mode = 'ended'
-      this.hooks.hint(null)
-      this.audio.play(this.run.phase === 'won' ? 'win' : 'lose')
-      if (this.run.phase === 'won') this.fx.burst(pos.clone().setY(pos.y + 1), '#7ef9ff', 60, 10)
-      this.hooks.end(this.run)
+  private updatePlay(dt: number, realDt: number): void {
+    const interact = this.input.consume('interact')
+    switch (this.activity) {
+      case 'free':
+        this.updateFree(dt, interact)
+        break
+      case 'chop':
+        this.updateChop(dt)
+        this.tuna.update(dt, 0, this.reducedMotion)
+        break
+      case 'sitIn':
+      case 'sitOut':
+        this.updateSitTransition(dt)
+        break
+      case 'sitting':
+        this.updateSitting(dt, realDt, interact)
+        break
     }
   }
 
-  render(alpha: number, frameSeconds: number): void {
-    this.time += frameSeconds
-    this.physics.sync(alpha)
-    const target = this.player.root.position
-    if (this.mode === 'attract') {
-      // Slow establishing orbit around the archipelago; the title menu sits on the left third.
-      const t = this.time * 0.045 + 0.9
-      const cam = this.cam.camera
-      cam.position.set(Math.sin(t) * 34, 15 + Math.sin(this.time * 0.2) * 1.5, -8 + Math.cos(t) * 34)
-      cam.lookAt(Math.sin(t + 1.9) * 6, 3, -8 + Math.cos(t + 1.9) * 6)
+  // ---------------------------------------------------------------- free roaming
+  private updateFree(dt: number, interact: boolean): void {
+    const look = this.input.takeLook()
+    this.camYaw -= look.x
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch + look.y * 0.6, 0.05, 0.95)
+    this.camDist = THREE.MathUtils.clamp(this.camDist + this.input.takeZoom(), 3, 11)
+    const mx = this.input.move.x, my = this.input.move.y
+    const fwd = new THREE.Vector3(-Math.sin(this.camYaw), 0, -Math.cos(this.camYaw))
+    const right = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw))
+    const wish = fwd.multiplyScalar(my).add(right.multiplyScalar(mx))
+    const mag = Math.min(1, wish.length())
+    const speed = (this.input.held('sprint') ? CONFIG.player.trotSpeed : CONFIG.player.walkSpeed) * mag
+    const targetV = mag > 0.01 ? wish.normalize().multiplyScalar(speed) : new THREE.Vector3()
+    this.velocity.lerp(targetV, Math.min(1, dt * 6))
+    const pos = this.tuna.root.position
+    pos.addScaledVector(this.velocity, dt)
+    this.collide(pos)
+    // Jump: a hop on the boots; landing thumps.
+    if (this.input.consume('jump') && this.grounded) {
+      this.vy = 3.3
+      this.grounded = false
+      this.audio.play('step', { volume: 0.4, rate: 1.2 })
+    }
+    if (!this.grounded) {
+      this.vy -= 9.8 * dt
+      pos.y += this.vy * dt
+      if (pos.y <= 0) {
+        pos.y = 0
+        this.vy = 0
+        this.grounded = true
+        this.land = 1
+        this.audio.play('step', { volume: 0.8, rate: 0.85 })
+        this.audio.play('step', { volume: 0.6, rate: 0.95 })
+      }
+    }
+    this.tuna.air += ((this.grounded ? 0 : 1) - this.tuna.air) * Math.min(1, dt * 12)
+    this.land *= Math.exp(-dt * 8)
+    const sp = this.velocity.length()
+    if (sp > 0.15) {
+      const h = Math.atan2(this.velocity.x, this.velocity.z)
+      this.tuna.heading += angleDelta(this.tuna.heading, h) * Math.min(1, dt * CONFIG.player.turnRate)
+    }
+    this.tuna.update(dt, this.grounded ? sp : 0, this.reducedMotion)
+    this.tuna.hips.position.y -= this.land * 0.06
+
+    this.nearest = this.grounded ? nearestSpot(this.world.spots, pos.x, pos.z) : null
+    if (interact && this.nearest) this.interact(this.nearest)
+  }
+
+  private collide(pos: THREE.Vector3): void {
+    const r = 0.38
+    for (const c of [...this.world.colliders, this.shrimp.collider]) {
+      const p = pushOutOfCircle(pos.x, pos.z, c.x, c.z, c.r + r)
+      pos.x = p.x
+      pos.z = p.z
+    }
+    pos.z = Math.max(pos.z, LAYOUT.fenceZ + 0.42)
+    pos.x = Math.max(pos.x, LAYOUT.sideFenceX + 0.42)
+    const d = Math.hypot(pos.x, pos.z - 1)
+    if (d > 11.5) {
+      pos.x *= 11.5 / d
+      pos.z = 1 + (pos.z - 1) * (11.5 / d)
+    }
+  }
+
+  private interact(spot: Spot): void {
+    if (spot.kind === 'chop') this.beginChop()
+    else if (spot.kind === 'lantern') {
+      const next = nextLanternLevel(this.world.lanternLevel) as LanternLevel
+      this.world.setLantern(next)
+      this.audio.play('lantern', { volume: 0.8 })
+      this.events.toast(`toast.lantern.${next}`)
     } else {
-      const look = this.mode === 'playing' ? this.input.takeLook() : { x: 0, y: 0 }
-      if (this.mode === 'playing' && this.tutorial === 'look') {
-        // Measure total movement, so slow input and high refresh rates can complete the hint.
-        this.tutorialLook += Math.abs(look.x) + Math.abs(look.y)
-        if (this.tutorialLook > 0.05) this.advanceTutorial('jump')
+      const seat = this.seats.find(s => s.id === spot.id)
+      if (seat) this.beginSit(seat)
+    }
+  }
+
+  // ---------------------------------------------------------------- chopping
+  private beginChop(): void {
+    this.activity = 'chop'
+    this.ct = 0
+    this.impactDone = false
+    this.velocity.set(0, 0, 0)
+    this.chopFrom.copy(this.tuna.root.position)
+    this.chopFromHeading = this.tuna.heading
+    this.nearest = null
+    this.events.hint(null)
+  }
+
+  private chopSpot(): THREE.Vector3 {
+    return new THREE.Vector3(LAYOUT.stump.x, 0, LAYOUT.stump.z + 1.25)
+  }
+
+  private updateChop(dt: number): void {
+    this.ct += dt
+    const ct = this.ct
+    const spot = this.chopSpot()
+    const tuna = this.tuna
+    // Step in to the chopping position facing the stump (-Z).
+    const k = smooth(ct / 0.3)
+    tuna.root.position.lerpVectors(this.chopFrom, spot, k)
+    tuna.heading = this.chopFromHeading + angleDelta(this.chopFromHeading, Math.PI) * k
+
+    // Axe & body keyframes in tuna space: grip position (local) and axe pitch.
+    type K = { t: number; grip: [number, number, number]; rx: number; pitch: number }
+    const keys: K[] = [
+      { t: 0.3, grip: [0.1, 0.95, 0.5], rx: -0.9, pitch: 0 },
+      { t: CHOP_IMPACT - 0.22, grip: [0.06, 1.32, 0.22], rx: -2.35, pitch: -0.38 },
+      { t: CHOP_IMPACT, grip: [0.02, 0.98, 0.56], rx: 0.02, pitch: 0.3 },
+      { t: 1.5, grip: [0.02, 0.99, 0.55], rx: 0.08, pitch: 0.22 },
+    ]
+    let pitch = 0
+    const local = new THREE.Object3D()
+    if (ct < 0.3) {
+      this.blendAxe(this.axeStuck, this.axeInTuna(keys[0]), smooth(ct / 0.3))
+    } else if (ct < 1.5) {
+      let i = 0
+      while (i < keys.length - 2 && ct > keys[i + 1].t) i++
+      const a = keys[i], b = keys[i + 1]
+      let u = THREE.MathUtils.clamp((ct - a.t) / (b.t - a.t), 0, 1)
+      u = b.t === CHOP_IMPACT ? u * u * u : smooth(u)
+      local.position.set(lerp(a.grip[0], b.grip[0], u), lerp(a.grip[1], b.grip[1], u), lerp(a.grip[2], b.grip[2], u))
+      local.rotation.set(lerp(a.rx, b.rx, u), 0, 0)
+      pitch = lerp(a.pitch, b.pitch, u)
+      this.applyAxeMatrix(this.tunaMatrix(local))
+    } else if (ct < 2.25) {
+      const u = smooth((ct - 1.5) / 0.75)
+      this.blendAxe(this.axeInTuna(keys[3]), this.axeStuck, u)
+      pitch = lerp(0.22, 0, u)
+    } else {
+      this.applyAxeMatrix(this.axeStuck)
+    }
+    tuna.pitch = pitch
+    if (!this.impactDone && ct >= CHOP_IMPACT) {
+      this.impactDone = true
+      this.onImpact()
+    }
+    this.updateHalves()
+    this.updateNewLog(dt)
+    if (ct >= CHOP_DURATION) {
+      this.activity = 'free'
+      tuna.pitch = 0
+      this.chopCount++
+      if (this.chopCount === 2 && !this.sitHintShown) {
+        this.sitHintShown = true
+        this.events.hint('hint.sit')
+        window.setTimeout(() => this.events.hint(null), 8000)
       }
-      this.cam.update(target, look, frameSeconds, false, this.reducedMotion)
     }
-    this.player.animate(frameSeconds, this.time, this.run.invulnerable > 0 && this.mode === 'playing', this.groundBelow(target))
-    this.cores.animate(frameSeconds)
-    this.drones.animate(frameSeconds, this.mode === 'playing' && this.run.timeLeft <= CONFIG.drones.rageAt)
-    this.fx.update(frameSeconds)
-    this.world.update(frameSeconds, target)
-    this.renderer.render(this.world.scene, this.cam.camera)
   }
 
-  /** Direction to the nearest remaining core relative to the camera (HUD compass). */
-  compass(): Compass | null {
-    const pos = this.player.root.position
-    let best: THREE.Vector3 | undefined
-    let bestD = Infinity
-    for (const c of this.cores.remaining()) {
-      const d = c.distanceToSquared(pos)
-      if (d < bestD) {
-        bestD = d
-        best = c
+  private tunaMatrix(local: THREE.Object3D): THREE.Matrix4 {
+    local.updateMatrix()
+    const root = new THREE.Matrix4().compose(this.tuna.root.position, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.tuna.heading), new THREE.Vector3(1, 1, 1))
+    return root.multiply(local.matrix)
+  }
+
+  private axeInTuna(k: { grip: [number, number, number]; rx: number }): THREE.Matrix4 {
+    const o = new THREE.Object3D()
+    o.position.set(...k.grip)
+    o.rotation.set(k.rx, 0, 0)
+    return this.tunaMatrix(o)
+  }
+
+  private applyAxeMatrix(m: THREE.Matrix4): void {
+    m.decompose(this.axe.position, this.axe.quaternion, this.axe.scale)
+  }
+
+  private blendAxe(a: THREE.Matrix4, b: THREE.Matrix4, u: number): void {
+    const pa = new THREE.Vector3(), qa = new THREE.Quaternion(), pb = new THREE.Vector3(), qb = new THREE.Quaternion(), s = new THREE.Vector3()
+    a.decompose(pa, qa, s)
+    b.decompose(pb, qb, s)
+    this.axe.position.lerpVectors(pa, pb, u)
+    this.axe.position.y += Math.sin(u * Math.PI) * 0.15
+    this.axe.quaternion.slerpQuaternions(qa, qb, u)
+  }
+
+  private onImpact(): void {
+    const top = new THREE.Vector3(LAYOUT.stump.x, LAYOUT.stumpTop + LAYOUT.logHeight, LAYOUT.stump.z)
+    this.audio.play('chop', { volume: 1, rate: 0.92, jitter: 0.04 })
+    this.fx.chipBurst(top, 46, 1)
+    this.shake = this.reducedMotion ? 0 : 1
+    // Replace the whole log by two clipped halves that fall apart, then fly onto the pile.
+    this.world.logOnStump.visible = false
+    for (const side of [1, -1] as const) {
+      const g = this.world.makeLog(LAYOUT.logHeight)
+      const normal = new THREE.Vector3(side, 0, 0)
+      const plane = new THREE.Plane()
+      g.traverse(o => {
+        const mesh = o as THREE.Mesh
+        if (!mesh.isMesh) return
+        const mats = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).map(m => {
+          const c = m.clone()
+          c.clippingPlanes = [plane]
+          c.clipShadows = true
+          c.side = THREE.DoubleSide
+          return c
+        })
+        mesh.material = Array.isArray(mesh.material) ? mats : mats[0]
+      })
+      const box = new THREE.Box3().setFromObject(g)
+      const size = box.getSize(new THREE.Vector3())
+      const cap = new THREE.Mesh(new THREE.PlaneGeometry(size.z * 0.9, size.y * 0.98), this.cutMat)
+      cap.position.set(0.002 * side, size.y / 2, 0)
+      cap.rotation.y = side === 1 ? -Math.PI / 2 : Math.PI / 2
+      cap.castShadow = true
+      g.add(cap)
+      g.position.set(LAYOUT.stump.x, LAYOUT.stumpTop - 0.01, LAYOUT.stump.z)
+      this.world.scene.add(g)
+      const slot = this.reserveSlot()
+      this.halves.push({ group: g, plane, normal, side, slot, start: g.position.clone(), startQ: g.quaternion.clone(), done: false })
+    }
+    this.newLogT = 0
+    if (this.shrimp.state === 'watch' && this.shrimp.position.distanceTo(this.tuna.root.position) < 7 && Math.random() < 0.6) this.shrimp.cheer()
+  }
+
+  private reserveSlot(): number {
+    const s = this.reservedSlots
+    this.reservedSlots++
+    return s
+  }
+
+  private updateHalves(): void {
+    const since = this.ct - CHOP_IMPACT
+    if (since < 0) return
+    for (const h of this.halves) {
+      if (h.done) continue
+      const g = h.group
+      if (since < 0.6) {
+        // Topple apart around the bottom outer edge.
+        const a = smooth(since / 0.6) * 1.15
+        g.rotation.set(0, 0, -h.side * a)
+        g.position.set(h.start.x + h.side * (0.06 + a * 0.16), h.start.y + Math.sin(a) * 0.06 - a * 0.02, h.start.z)
+        h.startQ.copy(g.quaternion)
+        h.start.copy(g.position)
+        h.start.x = LAYOUT.stump.x
+        h.start.y = LAYOUT.stumpTop - 0.01
+      } else {
+        const u = Math.min(1, (since - 0.6 - (h.side === 1 ? 0 : 0.18)) / 0.85)
+        if (u > 0) {
+          const from = new THREE.Vector3(LAYOUT.stump.x + h.side * 0.24, LAYOUT.stumpTop + 0.02, LAYOUT.stump.z)
+          const slot = this.pile.slotWorld(Math.min(PILE_CAPACITY - 1, h.slot))
+          const e = smooth(u)
+          g.position.lerpVectors(from, slot.pos, e)
+          g.position.y += Math.sin(e * Math.PI) * 1.1
+          // Lie down along Z, cut face downward (half +X keeps x>0, its cut faces -X).
+          const lie = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, h.side === 1 ? Math.PI / 2 : -Math.PI / 2, 'ZXY'))
+          if (slot.rotZ) lie.premultiply(tmpQ.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI))
+          const settle = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -h.side * 1.15))
+          g.quaternion.slerpQuaternions(settle, lie, e)
+          // Shrink toward the pile-piece size; recentre: the group origin is the log base axis.
+          const s = lerp(1, 0.78, e)
+          g.scale.setScalar(s)
+          g.position.y -= e * 0.0
+          if (u >= 1) this.landHalf(h)
+        }
+      }
+      g.updateMatrixWorld(true)
+      h.plane.setFromNormalAndCoplanarPoint(h.normal, new THREE.Vector3()).applyMatrix4(g.matrixWorld)
+    }
+    if (this.halves.length && this.halves.every(h => h.done)) this.halves = []
+  }
+
+  private landHalf(h: Half): void {
+    h.done = true
+    this.world.scene.remove(h.group)
+    this.addPieces(1)
+  }
+
+  private addPieces(n: number): void {
+    const before = this.pile.count
+    this.sessionWood += n
+    this.events.addWood(n)
+    this.pile.setCount(before + n)
+    this.audio.play('stack', { volume: 0.55 })
+    if (before < PILE_CAPACITY && before + n >= PILE_CAPACITY) this.events.toast('toast.pileFull')
+    if (this.reservedSlots < this.pile.count) this.reservedSlots = this.pile.count
+  }
+
+  private updateNewLog(dt: number): void {
+    if (this.newLogT < 0) return
+    this.newLogT += dt
+    const log = this.world.logOnStump
+    const appear = CHOP_DURATION - CHOP_IMPACT - 0.75
+    const t = this.newLogT - appear
+    if (t < 0) return
+    log.visible = true
+    const fall = 0.45
+    const baseY = LAYOUT.stumpTop - 0.01
+    if (t < fall) {
+      const u = t / fall
+      log.position.y = baseY + (1 - u * u) * 1.3
+    } else {
+      const b = t - fall
+      log.position.y = baseY + Math.max(0, Math.sin(b * 14) * 0.035 * Math.exp(-b * 9))
+      if (b > 0.5) {
+        log.position.y = baseY
+        this.newLogT = -1
       }
     }
-    if (!best) return null
-    const toCore = Math.atan2(-(best.x - pos.x), -(best.z - pos.z))
-    let angle = toCore - this.cam.yaw
-    angle = Math.atan2(Math.sin(angle), Math.cos(angle))
-    return { angle, distance: Math.sqrt(bestD), rise: best.y - pos.y }
   }
 
-  private onPlayerEvent(e: PlayerEvent, pos: THREE.Vector3): void {
-    const feet = pos.clone().setY(pos.y - CONFIG.player.halfHeight - CONFIG.player.radius)
-    if (e.type === 'jump') {
-      this.audio.play('jump')
-      this.fx.puff(feet, 0.3)
-      if (this.tutorial === 'jump') this.advanceTutorial('dash')
-    } else if (e.type === 'land') {
-      this.audio.play('land')
-      this.fx.puff(feet, e.impact)
-      if (e.impact > 0.5) this.cam.addShake(e.impact * 0.5)
-    } else if (e.type === 'dash') {
-      this.audio.play('dash')
-      this.fx.burst(pos, '#7ef9ff', 10, 3)
-      if (this.tutorial === 'dash') this.advanceTutorial('cores')
+  private onShrimpImpact(): void {
+    const top = this.shrimp.blockImpactPoint
+    this.fx.chipBurst(top, 10, 0.55)
+    const d = this.camPos.distanceTo(top)
+    this.audio.play('chop', { volume: Math.max(0.08, 0.5 - d * 0.03), rate: 1.12, jitter: 0.08 })
+    this.shrimpImpacts++
+    if (this.mode === 'playing' && this.shrimpImpacts % 3 === 0) {
+      const mesh = new THREE.Mesh(this.pieceGeo, [this.barkMat, this.cutMat])
+      mesh.castShadow = true
+      mesh.position.copy(top)
+      this.world.scene.add(mesh)
+      const slot = this.reserveSlot()
+      const toQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, this.pile.slotWorld(Math.min(PILE_CAPACITY - 1, slot)).rotZ))
+      this.flyers.push({ mesh, from: top.clone(), slot, t: 0, dur: 1.1, fromQ: new THREE.Quaternion().setFromEuler(new THREE.Euler(1.2, 0.4, 0)), toQ })
+      this.events.toast('toast.shrimp')
     }
   }
 
-  private onHurt(pos: THREE.Vector3): void {
-    this.audio.play('hurt')
-    this.cam.addShake(0.8)
-    this.fx.burst(pos, '#ff4d6d', 30, 8)
-    this.hooks.hurt()
-    this.hooks.popup(`-1`, this.project(pos.clone().setY(pos.y + 1)), 'hurt')
+  private updateFlyers(dt: number): void {
+    for (let i = this.flyers.length - 1; i >= 0; i--) {
+      const f = this.flyers[i]
+      f.t += dt
+      const u = Math.min(1, f.t / f.dur)
+      const e = smooth(u)
+      const to = this.pile.slotWorld(Math.min(PILE_CAPACITY - 1, f.slot)).pos
+      f.mesh.position.lerpVectors(f.from, to, e)
+      f.mesh.position.y += Math.sin(e * Math.PI) * 1.4
+      f.mesh.quaternion.slerpQuaternions(f.fromQ, f.toQ, e)
+      if (u >= 1) {
+        this.world.scene.remove(f.mesh)
+        this.flyers.splice(i, 1)
+        this.addPieces(1)
+      }
+    }
   }
 
-  private updateTutorial(pos: THREE.Vector3): void {
-    if (this.tutorial === 'move' && pos.distanceTo(this.tutorialStart) > 2.5) this.advanceTutorial(this.input.method === 'touch' ? 'jump' : 'look')
+  // ---------------------------------------------------------------- sitting & smoking
+  private beginSit(seat: Seat): void {
+    this.seat = seat
+    this.activity = 'sitIn'
+    this.sitT = 0
+    this.sitFrom.copy(this.tuna.root.position)
+    this.sitFromHeading = this.tuna.heading
+    this.velocity.set(0, 0, 0)
+    this.nearest = null
+    this.zoneSession = 0
+    this.zoneLineT = 5
+    this.puffT = 2.5
+    this.strumT = -1.2
+    this.guitar.visible = seat.id === 'campfire'
+    this.audio.play('sit', { volume: 0.7 })
+    this.events.cinematic(true)
+    this.events.hint(null)
   }
 
-  private advanceTutorial(next: Hint | null): void {
-    this.tutorial = next
-    this.tutorialLook = 0
-    this.hooks.hint(next)
+  private updateSitTransition(dt: number): void {
+    const seat = this.seat!
+    this.sitT += dt
+    const dur = this.activity === 'sitIn' ? 0.9 : 0.7
+    const u = Math.min(1, this.sitT / dur)
+    const e = smooth(u)
+    const tuna = this.tuna
+    if (this.activity === 'sitIn') {
+      const to = new THREE.Vector3(seat.pos.x, seat.rootY, seat.pos.z)
+      tuna.root.position.lerpVectors(this.sitFrom, to, e)
+      tuna.root.position.y = lerp(0, seat.rootY, e) + Math.sin(e * Math.PI) * 0.35
+      tuna.heading = this.sitFromHeading + angleDelta(this.sitFromHeading, seat.heading) * e
+      tuna.sit = e
+    } else {
+      const from = new THREE.Vector3(seat.pos.x, seat.rootY, seat.pos.z)
+      tuna.root.position.lerpVectors(from, seat.standAt, e)
+      tuna.root.position.y = lerp(seat.rootY, 0, e) + Math.sin(e * Math.PI) * 0.3
+      tuna.sit = 1 - e
+    }
+    tuna.update(dt, 0, this.reducedMotion)
+    if (u >= 1) {
+      if (this.activity === 'sitIn') this.activity = 'sitting'
+      else {
+        this.activity = 'free'
+        tuna.sit = 0
+        tuna.root.position.y = 0
+        this.seat = undefined
+        this.guitar.visible = false
+        this.audio.setMusicDuck(1)
+        tuna.body.rotation.z = 0
+      }
+    }
   }
 
-  private groundBelow(p: THREE.Vector3): number | null {
-    this.down.origin = { x: p.x, y: p.y, z: p.z }
-    const hit = this.physics.world.castRay(this.down, 30, true, undefined, undefined, this.player.collider)
-    return hit ? p.y - hit.timeOfImpact : null
+  private updateSitting(dt: number, realDt: number, interact: boolean): void {
+    const tuna = this.tuna
+    this.zoneSession += realDt
+    this.events.addZone(realDt)
+    this.sitT += dt
+    tuna.update(dt, 0, this.reducedMotion)
+    tuna.pitch = -0.08 + Math.sin(this.sitT * 0.4) * 0.03
+    this.input.takeLook()
+    this.input.takeZoom()
+    if (this.seat?.id === 'campfire') this.playGuitar(dt)
+    // Smoke rhythm: inhale (ember brightens), hold, exhale a puff.
+    this.puffT -= this.seat?.id === 'campfire' ? dt * 0.5 : dt
+    if (this.puffPhase === 'idle' && this.puffT <= 0) {
+      this.puffPhase = 'inhale'
+      this.puffT = 1.5
+      this.audio.play('puff', { volume: 0.6 })
+    } else if (this.puffPhase === 'inhale') {
+      tuna.emberGlow = lerp(tuna.emberGlow, 1.8, dt * 2.2)
+      if (this.puffT <= 0) {
+        this.puffPhase = 'hold'
+        this.puffT = 0.5
+      }
+    } else if (this.puffPhase === 'hold' && this.puffT <= 0) {
+      this.puffPhase = 'idle'
+      this.puffT = 5.5 + Math.random() * 3
+      const dir = tuna.forward(new THREE.Vector3()).multiplyScalar(0.35).add(new THREE.Vector3(0, 0.25, 0))
+      this.fx.puff(tuna.tipWorld(new THREE.Vector3()), dir)
+    }
+    if (this.puffPhase !== 'inhale') tuna.emberGlow = lerp(tuna.emberGlow, 0.35, dt * 0.8)
+    this.zoneLineT -= realDt
+    if (this.zoneLineT <= 0) {
+      this.zoneLineT = 9 + Math.random() * 5
+      const night = this.night > 0.6
+      const pool = night ? [0, 1, 3, 5, 6, 7] : [0, 1, 2, 3, 4, 5, 6]
+      this.events.zoneLine(`zone.line.${pool[Math.floor(Math.random() * pool.length)]}`)
+    }
+    const moving = Math.hypot(this.input.move.x, this.input.move.y) > 0.5
+    if ((interact || moving) && this.sitT > 1.2) {
+      this.activity = 'sitOut'
+      this.sitT = 0
+      this.puffPhase = 'idle'
+      this.events.cinematic(false)
+      this.audio.play('sit', { volume: 0.5, rate: 1.1 })
+      this.camYaw = 0.2
+    }
   }
 
-  project(world: THREE.Vector3): { x: number; y: number } {
-    const v = world.clone().project(this.cam.camera)
-    const canvas = this.renderer.canvas
-    return { x: ((v.x + 1) / 2) * canvas.clientWidth, y: ((1 - v.y) / 2) * canvas.clientHeight }
+  /** Western strum: G G C C G G D D Em Em C D, pattern D . D U . U D U at 84 bpm. */
+  private playGuitar(dt: number): void {
+    this.audio.setMusicDuck(0.3)
+    const beat = 60 / 84
+    const prev = this.strumT
+    this.strumT += dt
+    const PATTERN: Array<[number, boolean]> = [[0, true], [1, true], [1.5, false], [2.5, false], [3, true], [3.5, false]]
+    const PROG = ['G', 'G', 'C', 'C', 'G', 'G', 'D', 'D', 'Em', 'Em', 'C', 'D']
+    const CHORDS: Record<string, number[]> = {
+      G: [98.0, 123.47, 146.83, 196.0, 246.94, 392.0],
+      C: [130.81, 164.81, 196.0, 261.63, 329.63],
+      D: [146.83, 220.0, 293.66, 369.99],
+      Em: [82.41, 123.47, 164.81, 196.0, 246.94, 329.63],
+    }
+    if (this.strumT >= 0) {
+      const barLen = 4 * beat
+      for (const [b, down] of PATTERN) {
+        const at = b * beat
+        const bar = Math.floor(this.strumT / barLen)
+        const tIn = this.strumT - bar * barLen
+        const pIn = prev - bar * barLen
+        if (pIn < at && tIn >= at) {
+          const chord = PROG[bar % PROG.length]
+          this.audio.strum(CHORDS[chord], down, down ? 0.42 : 0.3)
+          this.strumKick = down ? 1 : -0.7
+        }
+      }
+    }
+    this.strumKick *= Math.exp(-dt * 9)
+    const g = this.guitar
+    g.rotation.z = GUITAR_REST.rz + this.strumKick * 0.06
+    g.position.y = GUITAR_REST.y - Math.abs(this.strumKick) * 0.008
+    // Sway with the beat.
+    this.tuna.body.rotation.z = Math.sin(this.strumT * Math.PI / beat / 2) * 0.05
   }
+
+  private updateSmoke(dt: number): void {
+    const tuna = this.tuna
+    this.wispT -= dt
+    if (this.wispT <= 0) {
+      this.wispT = 0.14
+      this.fx.wisp(tuna.tipWorld(tmpV))
+    }
+    // While roaming, an occasional casual puff.
+    if (this.activity === 'free' && this.mode === 'playing') {
+      this.walkPuffT -= dt
+      if (this.walkPuffT < 1.2) tuna.emberGlow = lerp(tuna.emberGlow, 1.3, dt * 2)
+      else tuna.emberGlow = lerp(tuna.emberGlow, 0.35, dt)
+      if (this.walkPuffT <= 0) {
+        this.walkPuffT = 12 + Math.random() * 8
+        this.fx.puff(tuna.tipWorld(new THREE.Vector3()), tuna.forward(new THREE.Vector3()).multiplyScalar(0.2).add(new THREE.Vector3(0, 0.2, 0)))
+      }
+    }
+    const lt = new THREE.Vector3(LAYOUT.lantern.x, 0.53, LAYOUT.lantern.z)
+    this.fx.ambient(lt, this.world.lanternLevel > 0, new THREE.Vector3(0, 0, -2))
+  }
+
+  // ---------------------------------------------------------------- camera
+  private updateCamera(realDt: number, dt: number): void {
+    const cam = this.camera
+    const tunaPos = this.tuna.root.position
+    let pos: THREE.Vector3
+    let look: THREE.Vector3
+    let fov = CONFIG.camera.fov
+    let rate = CONFIG.camera.follow
+    if (this.mode === 'title') {
+      const a = Math.sin(this.elapsed * 0.05) * 0.5 + 0.35
+      pos = new THREE.Vector3(Math.sin(a) * 8.5, 1.9, -1 + Math.cos(a) * 8.5)
+      look = new THREE.Vector3(0, 1.3, -3)
+      fov = 46
+      rate = 1.5
+    } else if (this.activity === 'chop') {
+      const ct = this.ct
+      const close = smooth((ct - 0.5) / 0.4) * (1 - smooth((ct - 1.9) / 0.6))
+      const base = new THREE.Vector3(LAYOUT.stump.x, 0, LAYOUT.stump.z)
+      const wide = new THREE.Vector3(base.x + 2.6, 1.7, base.z + 3.2)
+      const tight = new THREE.Vector3(base.x + 1.75, 1.05, base.z + 1.2)
+      pos = wide.lerp(tight, close)
+      look = new THREE.Vector3(base.x - 0.05, 0.82, base.z + 0.45)
+      fov = lerp(44, 34, close)
+      rate = 4
+    } else if (this.seat && (this.activity === 'sitting' || this.activity === 'sitIn')) {
+      const s = this.seat
+      const t = this.activity === 'sitting' ? this.sitT : 0
+      const pull = smooth(t / 8)
+      const orb = 0.42 + Math.sin(this.elapsed * 0.045) * 0.22
+      const d = lerp(2.4, 7.8, pull)
+      const sy = s.rootY
+      pos = new THREE.Vector3(s.pos.x + Math.sin(orb) * d, sy + lerp(0.75, 1.35, pull), s.pos.z + Math.cos(orb) * d)
+      look = new THREE.Vector3(s.pos.x - Math.sin(orb) * 2.5, sy + lerp(0.7, 2.2, pull), s.pos.z - 7)
+      fov = lerp(44, 40, pull)
+      rate = this.activity === 'sitIn' ? 2.5 : 1.2
+    } else {
+      const d = this.camDist * (CONFIG.camera.distance / 6.2)
+      const cp = Math.cos(this.camPitch), sp = Math.sin(this.camPitch)
+      const target = tunaPos.clone().add(new THREE.Vector3(0, 0.75, 0))
+      pos = target.clone().add(new THREE.Vector3(Math.sin(this.camYaw) * d * cp, d * sp + (CONFIG.camera.height - 2.4) * 0.5, Math.cos(this.camYaw) * d * cp))
+      pos.y = Math.max(0.5, pos.y)
+      look = target.add(new THREE.Vector3(-Math.sin(this.camYaw) * 1.2, 0.35, -Math.cos(this.camYaw) * 1.2))
+    }
+    const k = 1 - Math.exp(-rate * realDt)
+    this.camPos.lerp(pos, k)
+    this.camLook.lerp(look, k)
+    cam.position.copy(this.camPos)
+    if (this.shake > 0.001) {
+      cam.position.add(new THREE.Vector3((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05, 0).multiplyScalar(this.shake))
+      this.shake *= Math.exp(-dt * 10)
+    }
+    cam.lookAt(this.camLook)
+    if (Math.abs(cam.fov - fov) > 0.01) {
+      cam.fov += (fov - cam.fov) * k
+      cam.updateProjectionMatrix()
+    }
+  }
+}
+
+let rings: THREE.Texture | undefined
+function ringTexture(): THREE.Texture {
+  if (rings) return rings
+  const c = document.createElement('canvas')
+  c.width = c.height = 256
+  const g = c.getContext('2d')!
+  g.fillStyle = '#dcb98a'
+  g.fillRect(0, 0, 256, 256)
+  for (let r = 6; r < 128; r += 5 + Math.random() * 6) {
+    g.strokeStyle = `rgba(${150 + Math.random() * 30},${100 + Math.random() * 20},${60},${0.35 + Math.random() * 0.3})`
+    g.lineWidth = 1 + Math.random() * 1.5
+    g.beginPath()
+    g.ellipse(128 + Math.random() * 2, 128 + Math.random() * 2, r, r * (0.96 + Math.random() * 0.06), 0, 0, Math.PI * 2)
+    g.stroke()
+  }
+  g.strokeStyle = 'rgba(90,60,30,0.5)'
+  g.lineWidth = 2
+  g.beginPath()
+  g.moveTo(128, 128)
+  g.lineTo(220, 60)
+  g.stroke()
+  rings = new THREE.CanvasTexture(c)
+  rings.colorSpace = THREE.SRGBColorSpace
+  return rings
+}
+
+const GUITAR_REST = { x: 0.4, y: -0.02, z: 0.08, rx: -0.55, ry: 0, rz: 0 }
+
+/**
+ * Guitar held against the tuna's flank (the side facing the camera when seated): neck along
+ * +Z (forward, angled up past the head), soundboard facing outward (+X).
+ */
+function makeGuitar(gltf: { scene: THREE.Object3D }): THREE.Group {
+  const src = gltf.scene.clone()
+  src.updateMatrixWorld(true)
+  const size = new THREE.Box3().setFromObject(src).getSize(new THREE.Vector3())
+  const dims = [size.x, size.y, size.z]
+  const order = [0, 1, 2].sort((i, j) => dims[j] - dims[i])
+  const axes = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)]
+  const long = axes[order[0]], thin = axes[order[2]]
+  const up = new THREE.Vector3().crossVectors(long, thin)
+  // Rows map source axes to target: thin → X, up → Y, long → Z.
+  const m = new THREE.Matrix4().set(thin.x, thin.y, thin.z, 0, up.x, up.y, up.z, 0, long.x, long.y, long.z, 0, 0, 0, 0, 1)
+  src.quaternion.setFromRotationMatrix(m)
+  src.updateMatrixWorld(true)
+  const wrap = new THREE.Group()
+  wrap.add(src)
+  wrap.updateMatrixWorld(true)
+  const sz = new THREE.Box3().setFromObject(wrap).getSize(new THREE.Vector3())
+  src.scale.multiplyScalar(0.82 / Math.max(sz.x, sz.y, sz.z))
+  wrap.updateMatrixWorld(true)
+  // Body (wide end) toward the tail: put the centre of mass behind the holder origin.
+  const box = new THREE.Box3().setFromObject(wrap)
+  const c = box.getCenter(new THREE.Vector3())
+  src.position.sub(c)
+  wrap.updateMatrixWorld(true)
+  let front = 0, back = 0
+  const v = new THREE.Vector3()
+  src.traverse(o => {
+    const mesh = o as THREE.Mesh
+    if (!mesh.isMesh) return
+    mesh.castShadow = true
+    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute
+    for (let i = 0; i < pos.count; i += 4) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld)
+      if (v.z > 0) front++
+      else back++
+    }
+  })
+  // Vertex density is higher on the neck (frets, tuners) for this model; checked visually: neck forward (+Z).
+  if (front < back) wrap.rotation.y = Math.PI
+  const holder = new THREE.Group()
+  holder.add(wrap)
+  holder.position.set(GUITAR_REST.x, GUITAR_REST.y, GUITAR_REST.z)
+  holder.rotation.set(GUITAR_REST.rx, GUITAR_REST.ry, GUITAR_REST.rz)
+  return holder
 }

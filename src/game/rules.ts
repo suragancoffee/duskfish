@@ -1,99 +1,122 @@
-import { CONFIG } from './config'
+/**
+ * Pure, DOM-free rules for the dusk ranch: interaction picking, the slow fall of night,
+ * lantern brightness, slow-motion pacing and woodpile layout. Unit-tested in tests/rules.test.ts.
+ */
+
+export type SpotKind = 'chop' | 'sit' | 'lantern'
+
+export type Spot = {
+  id: string
+  kind: SpotKind
+  x: number
+  z: number
+  /** How close the fish must stand (metres from spot centre) to interact. */
+  reach: number
+}
+
+/** Closest spot the player can reach, or null. */
+export function nearestSpot(spots: readonly Spot[], x: number, z: number): Spot | null {
+  let best: Spot | null = null
+  let bestD = Infinity
+  for (const s of spots) {
+    const d = Math.hypot(s.x - x, s.z - z)
+    if (d <= s.reach && d < bestD) {
+      best = s
+      bestD = d
+    }
+  }
+  return best
+}
 
 /**
- * Pure run rules: score, combo, lives, clock, win/lose. No three.js, no Rapier, no DOM — the
- * scene reports events and reads the resulting state, and unit tests cover every rule here.
+ * Night depth 0 (golden dusk) → 1 (deep night) over `minutes`, holds for a while, then a dreamlike
+ * drift back to dusk so a long idle session keeps changing. Returns 0..1.
  */
-export type RunPhase = 'playing' | 'won' | 'lost'
-export type LoseReason = 'time' | 'lives'
-
-export type RunState = {
-  unranked: boolean
-  phase: RunPhase
-  loseReason?: LoseReason
-  score: number
-  lives: number
-  timeLeft: number
-  elapsed: number
-  collected: number
-  total: number
-  combo: number
-  comboTimer: number
-  invulnerable: number
-  /** End-of-run bonuses (already included in `score`), kept separate for the results screen. */
-  timeBonus: number
-  lifeBonus: number
+export function nightAt(seconds: number, minutes: number): number {
+  const fall = Math.max(1, minutes * 60)
+  const hold = fall * 0.5
+  const rise = fall * 0.4
+  const cycle = fall + hold + rise
+  const t = ((seconds % cycle) + cycle) % cycle
+  if (t < fall) return smooth(t / fall)
+  if (t < fall + hold) return 1
+  return 1 - smooth((t - fall - hold) / rise)
 }
 
-export function createRun(totalCores: number, rules = CONFIG): RunState {
-  return {
-    unranked: false,
-    phase: 'playing',
-    score: 0,
-    lives: rules.run.lives,
-    timeLeft: rules.run.seconds,
-    elapsed: 0,
-    collected: 0,
-    total: totalCores,
-    combo: 0,
-    comboTimer: 0,
-    invulnerable: 0,
-    timeBonus: 0,
-    lifeBonus: 0,
-  }
+export type LanternLevel = 0 | 1 | 2
+
+export function nextLanternLevel(level: LanternLevel): LanternLevel {
+  return level === 0 ? 1 : level === 1 ? 2 : 0
 }
 
-export function tick(s: RunState, dt: number): RunState {
-  if (s.phase !== 'playing') return s
-  const timeLeft = Math.max(0, s.timeLeft - dt)
-  const comboTimer = Math.max(0, s.comboTimer - dt)
-  const next: RunState = {
-    ...s,
-    timeLeft,
-    elapsed: s.elapsed + dt,
-    comboTimer,
-    combo: comboTimer > 0 ? s.combo : 0,
-    invulnerable: Math.max(0, s.invulnerable - dt),
-  }
-  if (timeLeft <= 0) return { ...next, phase: 'lost', loseReason: 'time' }
-  return next
+/** Point-light intensity: higher wick levels, and a deeper night makes the same flame matter more. */
+export function lanternIntensity(level: LanternLevel, night: number): number {
+  if (level === 0) return 0
+  const base = level === 1 ? 2.2 : 5.5
+  return base * (0.7 + 0.6 * clamp01(night))
 }
 
-/** A core was picked up. Returns the new state and the points it was worth (for popups). */
-export function collect(s: RunState, rules = CONFIG): { state: RunState; points: number } {
-  if (s.phase !== 'playing') return { state: s, points: 0 }
-  const combo = Math.min(rules.score.comboMax, s.comboTimer > 0 ? s.combo + 1 : 1)
-  const points = rules.score.core * combo
-  const collected = s.collected + 1
-  let next: RunState = { ...s, score: s.score + points, combo, comboTimer: rules.score.comboWindow, collected }
-  if (collected >= s.total) {
-    const timeBonus = Math.ceil(next.timeLeft) * rules.score.timeBonus
-    const lifeBonus = next.lives * rules.score.lifeBonus
-    next = { ...next, phase: 'won', timeBonus, lifeBonus, score: next.score + timeBonus + lifeBonus }
-  }
-  return { state: next, points }
+/** Chop timeline (seconds of chop time): windup, swing, impact at CHOP_IMPACT, recovery. */
+export const CHOP_IMPACT = 1.05
+export const CHOP_DURATION = 2.6
+
+/** Time scale during a chop: real-time windup, eased into slow motion around the impact. */
+export function chopTimeScale(t: number, slow: number): number {
+  const a = CHOP_IMPACT - 0.2
+  const b = CHOP_IMPACT + 0.28
+  if (t <= a - 0.1 || t >= b + 0.25) return 1
+  if (t < a) return lerp(1, slow, (t - (a - 0.1)) / 0.1)
+  if (t <= b) return slow
+  return lerp(slow, 1, (t - b) / 0.25)
 }
 
-/** The player was hit or fell. Ignored while invulnerable unless `fell` (falling always costs a life). */
-export function damage(s: RunState, fell = false, rules = CONFIG): { state: RunState; hurt: boolean } {
-  if (s.phase !== 'playing') return { state: s, hurt: false }
-  if (!fell && s.invulnerable > 0) return { state: s, hurt: false }
-  const lives = s.lives - 1
-  const next: RunState = { ...s, lives, combo: 0, comboTimer: 0, invulnerable: rules.run.invulnerable }
-  if (lives <= 0) return { state: { ...next, lives: 0, phase: 'lost', loseReason: 'lives' }, hurt: true }
-  return { state: next, hurt: true }
+/** Pile slot for the n-th split piece: rows of 6 laid along x, alternating layer offsets. */
+export const PILE_COLUMNS = 6
+export const PILE_LAYERS = 9
+export const PILE_CAPACITY = PILE_COLUMNS * PILE_LAYERS
+
+export function pileSlot(index: number): { x: number; y: number; z: number; flip: boolean } {
+  const i = Math.max(0, Math.min(PILE_CAPACITY - 1, Math.floor(index)))
+  const layer = Math.floor(i / PILE_COLUMNS)
+  const col = i % PILE_COLUMNS
+  const offset = layer % 2 === 0 ? 0 : 0.16
+  return { x: (col - (PILE_COLUMNS - 1) / 2) * 0.32 + offset, y: layer * 0.155, z: 0, flip: (i + layer) % 2 === 1 }
 }
 
-/** Star rating on the results screen: 1 for finishing, +1 at half time left, +1 with no hits. */
-export function stars(s: RunState, rules = CONFIG): number {
-  if (s.phase !== 'won') return 0
-  let n = 1
-  if (s.timeLeft >= rules.run.seconds / 2) n += 1
-  if (s.lives === rules.run.lives) n += 1
-  return n
+/** "mm:ss" for the gentle zone-out timer. */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  const m = Math.floor(s / 60)
+  return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
-export function formatClock(seconds: number): string {
-  const whole = Math.max(0, Math.ceil(seconds))
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
+/** Resolve a point out of a circle (2D, xz). Returns the corrected position. */
+export function pushOutOfCircle(x: number, z: number, cx: number, cz: number, r: number): { x: number; z: number } {
+  const dx = x - cx
+  const dz = z - cz
+  const d = Math.hypot(dx, dz)
+  if (d >= r) return { x, z }
+  if (d < 1e-6) return { x: cx + r, z: cz }
+  return { x: cx + (dx / d) * r, z: cz + (dz / d) * r }
+}
+
+/** Shortest signed angle from a to b (radians). */
+export function angleDelta(a: number, b: number): number {
+  let d = (b - a) % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  if (d < -Math.PI) d += Math.PI * 2
+  return d
+}
+
+export function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v
+}
+
+export function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * clamp01(t)
+}
+
+export function smooth(t: number): number {
+  const x = clamp01(t)
+  return x * x * (3 - 2 * x)
 }

@@ -2,3 +2,28 @@ node_modules/
 dist/
 shots/
 /.manus-webdev/preview-identity.json
+# Assets restored from assets.lock.json
+/assets/audio/amb_crickets.mp3
+/assets/audio/bgm_dusk_guitar.mp3
+/assets/audio/sfx_chop.mp3
+/assets/audio/sfx_lantern.mp3
+/assets/audio/sfx_puff.mp3
+/assets/audio/sfx_sit.mp3
+/assets/audio/sfx_stack.mp3
+/assets/audio/sfx_step.mp3
+/assets/models/axe.glb
+/assets/models/tuna.glb
+.scratch/
+viewer.html
+# Assets restored from assets.lock.json
+/assets/models/boot.glb
+/assets/models/fence.glb
+/assets/models/lantern.glb
+/assets/models/log.glb
+/assets/models/rock.glb
+/assets/models/stump.glb
+/assets/models/tree.glb
+# Assets restored from assets.lock.json
+/assets/models/prawn.glb
+# Assets restored from assets.lock.json
+/assets/models/guitar.glb

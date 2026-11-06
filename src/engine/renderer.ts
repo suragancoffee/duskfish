@@ -3,12 +3,23 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import type { Quality } from './save'
+
+/** Replaces NaN/Inf and clamps HDR before bloom so one bad pixel can never flood the frame. */
+const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){ vec4 c = texture2D(tDiffuse, vUv);
+      if (!(c.r == c.r) || !(c.g == c.g) || !(c.b == c.b) || c.r > 1e4 || c.g > 1e4 || c.b > 1e4) c = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = vec4(min(c.rgb, vec3(24.0)), c.a); }`,
+}
 
 type Preset = { pixelRatio: number; shadows: boolean; shadowMap: number; bloom: boolean; antialias: boolean }
 export const QUALITY_PRESETS: Record<Quality, Preset> = {
   low: { pixelRatio: 1, shadows: false, shadowMap: 512, bloom: false, antialias: false },
-  medium: { pixelRatio: 1.5, shadows: true, shadowMap: 1024, bloom: false, antialias: true },
+  medium: { pixelRatio: 1.25, shadows: true, shadowMap: 1024, bloom: true, antialias: true },
   high: { pixelRatio: 2, shadows: true, shadowMap: 2048, bloom: true, antialias: true },
 }
 
@@ -37,7 +48,8 @@ export class Renderer {
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: this.preset.antialias, powerPreference: 'high-performance' })
     this.gl.outputColorSpace = THREE.SRGBColorSpace
     this.gl.toneMapping = THREE.ACESFilmicToneMapping
-    this.gl.toneMappingExposure = 1
+    this.gl.toneMappingExposure = 1.05
+    this.gl.localClippingEnabled = true
     this.gl.shadowMap.type = THREE.PCFSoftShadowMap
     this.applyQuality(quality)
     window.addEventListener('resize', () => this.resize())
@@ -66,7 +78,8 @@ export class Renderer {
     const size = this.gl.getSize(new THREE.Vector2())
     this.composer = new EffectComposer(this.gl)
     this.composer.addPass(new RenderPass(scene, camera))
-    this.bloom = new UnrealBloomPass(size, 0.45, 0.3, 1.6)
+    this.composer.addPass(new ShaderPass(SanitizeShader))
+    this.bloom = new UnrealBloomPass(size, 0.55, 0.45, 1.1)
     this.composer.addPass(this.bloom)
     this.composer.addPass(new OutputPass())
     this.composer.setSize(size.x, size.y)

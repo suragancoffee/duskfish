@@ -1,6 +1,149 @@
 {
   "version": 2,
-  "groups": {},
+  "groups": {
+    "audio": {
+      "name": "Audio",
+      "order": 10
+    },
+    "models": {
+      "name": "Models",
+      "order": 20
+    }
+  },
   "bundles": {},
-  "assets": {}
+  "assets": {
+    "assets/audio/amb_crickets.mp3": {
+      "path": "/manus-storage/game/sha256/5dd538d28e1667b1080dd036d02c4f0fce0789ff36b9878c47c5300fbcb0e960.mp3",
+      "sha256": "sha256:5dd538d28e1667b1080dd036d02c4f0fce0789ff36b9878c47c5300fbcb0e960",
+      "size": 481114,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/bgm_dusk_guitar.mp3": {
+      "path": "/manus-storage/game/sha256/f7764a5738aa86401340c6fe67de1c6c64322881af26f165815fa0f0123b4640.mp3",
+      "sha256": "sha256:f7764a5738aa86401340c6fe67de1c6c64322881af26f165815fa0f0123b4640",
+      "size": 3554599,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_chop.mp3": {
+      "path": "/manus-storage/game/sha256/dcf785c7675576bf8654a91e2fb2834acf868113bba9ef37013bee1d74ca6906.mp3",
+      "sha256": "sha256:dcf785c7675576bf8654a91e2fb2834acf868113bba9ef37013bee1d74ca6906",
+      "size": 24702,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_lantern.mp3": {
+      "path": "/manus-storage/game/sha256/18a7a3f19328557f78d6c6f18e57975f1dcfc11fbd452360c0888c81fb3b1d1a.mp3",
+      "sha256": "sha256:18a7a3f19328557f78d6c6f18e57975f1dcfc11fbd452360c0888c81fb3b1d1a",
+      "size": 20105,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_puff.mp3": {
+      "path": "/manus-storage/game/sha256/fb8014f33fcbb868079d3c816beef9f3d282d3450362baa2532db54ffc8600d4.mp3",
+      "sha256": "sha256:fb8014f33fcbb868079d3c816beef9f3d282d3450362baa2532db54ffc8600d4",
+      "size": 56885,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_sit.mp3": {
+      "path": "/manus-storage/game/sha256/8511098d4eba87a970605ceb4dc306170547b7747fad640a76ad223dc4746d58.mp3",
+      "sha256": "sha256:8511098d4eba87a970605ceb4dc306170547b7747fad640a76ad223dc4746d58",
+      "size": 17179,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_stack.mp3": {
+      "path": "/manus-storage/game/sha256/41ebbc347cafe28a7633be7ff4cac165e85e593c2249c50a977db72823365f18.mp3",
+      "sha256": "sha256:41ebbc347cafe28a7633be7ff4cac165e85e593c2249c50a977db72823365f18",
+      "size": 13835,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/audio/sfx_step.mp3": {
+      "path": "/manus-storage/game/sha256/5aed199c7b9e74b69814f3bceab8e4cf1d18badff578c5a582521dff3e2c5990.mp3",
+      "sha256": "sha256:5aed199c7b9e74b69814f3bceab8e4cf1d18badff578c5a582521dff3e2c5990",
+      "size": 8820,
+      "assetType": "audio",
+      "groupId": "audio"
+    },
+    "assets/models/axe.glb": {
+      "path": "/manus-storage/game/sha256/c8b299a4641327aef2e04424ff82878b3951ce7d47a36a32b7005bd18d5a7ad3.glb",
+      "sha256": "sha256:c8b299a4641327aef2e04424ff82878b3951ce7d47a36a32b7005bd18d5a7ad3",
+      "size": 1701572,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/boot.glb": {
+      "path": "/manus-storage/game/sha256/0dd734fae2bf922dbb509fc1cbdd09ac528ff0d6356cd831fdc9395aec306e66.glb",
+      "sha256": "sha256:0dd734fae2bf922dbb509fc1cbdd09ac528ff0d6356cd831fdc9395aec306e66",
+      "size": 1527704,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/fence.glb": {
+      "path": "/manus-storage/game/sha256/9c78172733c12bcd98f0f9b709df7851f41c9180b8d18994818ab40446c2e544.glb",
+      "sha256": "sha256:9c78172733c12bcd98f0f9b709df7851f41c9180b8d18994818ab40446c2e544",
+      "size": 2036960,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/guitar.glb": {
+      "path": "/manus-storage/game/sha256/e593def7f0defa8202672dfc962a0f21705628ee64a42a9ab404e3e9670ba7e4.glb",
+      "sha256": "sha256:e593def7f0defa8202672dfc962a0f21705628ee64a42a9ab404e3e9670ba7e4",
+      "size": 1522372,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/lantern.glb": {
+      "path": "/manus-storage/game/sha256/f854bcf3383e1e1ece6dc99b472fdf954a27f31014d2b4d12d50007ae91f82d3.glb",
+      "sha256": "sha256:f854bcf3383e1e1ece6dc99b472fdf954a27f31014d2b4d12d50007ae91f82d3",
+      "size": 916596,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/log.glb": {
+      "path": "/manus-storage/game/sha256/405f02b53f69920085a84f6e5759d5e18b31bc46c5e80c5f0809def97a3e3065.glb",
+      "sha256": "sha256:405f02b53f69920085a84f6e5759d5e18b31bc46c5e80c5f0809def97a3e3065",
+      "size": 1677796,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/prawn.glb": {
+      "path": "/manus-storage/game/sha256/efd95ec05c2eb5e57d05f01bbad3035a6b4c036878c119ab20e261af9112c444.glb",
+      "sha256": "sha256:efd95ec05c2eb5e57d05f01bbad3035a6b4c036878c119ab20e261af9112c444",
+      "size": 1476776,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/rock.glb": {
+      "path": "/manus-storage/game/sha256/4d5cbc4512e49ff1b7be60c31bcc40d013ea42a898264268f8b4b601a5359784.glb",
+      "sha256": "sha256:4d5cbc4512e49ff1b7be60c31bcc40d013ea42a898264268f8b4b601a5359784",
+      "size": 2167644,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/stump.glb": {
+      "path": "/manus-storage/game/sha256/67a362ef5a83a7a4d86123f2093c010604593b380b0108a923842691c83375ba.glb",
+      "sha256": "sha256:67a362ef5a83a7a4d86123f2093c010604593b380b0108a923842691c83375ba",
+      "size": 1918932,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/tree.glb": {
+      "path": "/manus-storage/game/sha256/572f2d31911c8b6f265664480f7750b8bbad4540137360d6c9fb0cb8211327a1.glb",
+      "sha256": "sha256:572f2d31911c8b6f265664480f7750b8bbad4540137360d6c9fb0cb8211327a1",
+      "size": 1352660,
+      "assetType": "model",
+      "groupId": "models"
+    },
+    "assets/models/tuna.glb": {
+      "path": "/manus-storage/game/sha256/827163bdb489f74bd273f14e623dbf0d3bc827fc62a36042bec08ee2000fbaff.glb",
+      "sha256": "sha256:827163bdb489f74bd273f14e623dbf0d3bc827fc62a36042bec08ee2000fbaff",
+      "size": 3845016,
+      "assetType": "model",
+      "groupId": "models"
+    }
+  }
 }

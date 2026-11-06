@@ -1,408 +1,450 @@
 import * as THREE from 'three'
-import type { Physics } from '../engine/physics'
-import { RAPIER } from '../engine/physics'
+import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import type { ModelName } from './assetTable'
+import { lanternIntensity, type LanternLevel, type Spot } from './rules'
+
+export type Models = Record<ModelName, GLTF>
+
+/** Layout of the clearing (metres). The sunset lies toward -Z, beyond the back fence. */
+export const LAYOUT = {
+  stump: new THREE.Vector3(0, 0, -1.2),
+  stumpTop: 0.41,
+  logHeight: 0.42,
+  lantern: new THREE.Vector3(1.3, 0, -0.7),
+  rock: new THREE.Vector3(-3.4, 0, 1.2),
+  rockSeat: new THREE.Vector3(-3.4, 0, 0.88),
+  fenceZ: -5.2,
+  fenceSeat: new THREE.Vector3(3.6, 0, -5.2),
+  sideFenceX: -9.6,
+  shrimpBlock: new THREE.Vector3(-2.5, 0, -2.3),
+  pile: new THREE.Vector3(3.0, 0, -2.7),
+  sunDir: new THREE.Vector3(0.25, 0.06, -1).normalize(),
+}
+
+export type Collider = { x: number; z: number; r: number }
 
 /**
- * Procedural sky-islands level. Everything is built from primitives and a seeded RNG, so the
- * starter ships no model files and the layout is identical on every load.
- *
- * To make a different level, edit ISLANDS / LINKS: stepping stones are generated automatically
- * so every link stays jumpable with the tuning in config.ts.
+ * Normalise a generated model: uniform scale so `axis` spans `size` metres, base on y=0,
+ * centred on x/z. Returns a wrapper so callers can freely position/rotate it.
  */
-export type Island = { x: number; z: number; top: number; r: number; cores: number; decor?: boolean }
-type Link = { a: number; b: number; kind: 'stones' | 'mover' }
-
-export const ISLANDS: Island[] = [
-  { x: 0, z: 0, top: 0, r: 7, cores: 2, decor: true },
-  { x: 15, z: 3, top: 1.5, r: 4, cores: 2, decor: true },
-  { x: 24, z: -8, top: 3.2, r: 3.5, cores: 2 },
-  { x: 14, z: -19, top: 4.8, r: 4.5, cores: 2, decor: true },
-  { x: 0, z: -27, top: 6.5, r: 5, cores: 2, decor: true },
-  { x: -15, z: -16, top: 4.5, r: 4, cores: 2, decor: true },
-  { x: -23, z: 1, top: 2.8, r: 3.5, cores: 2 },
-  { x: -11, z: 17, top: 1.2, r: 4.5, cores: 2, decor: true },
-  { x: 7, z: 17, top: 2.5, r: 3.5, cores: 2 },
-  // Summit: reached by the lift from island 4.
-  { x: 0, z: -12, top: 10.5, r: 3, cores: 3 },
-]
-
-const LINKS: Link[] = [
-  { a: 0, b: 1, kind: 'stones' },
-  { a: 1, b: 2, kind: 'stones' },
-  { a: 2, b: 3, kind: 'stones' },
-  { a: 3, b: 4, kind: 'stones' },
-  { a: 4, b: 5, kind: 'stones' },
-  { a: 5, b: 6, kind: 'stones' },
-  { a: 6, b: 7, kind: 'mover' },
-  { a: 7, b: 8, kind: 'stones' },
-  { a: 8, b: 0, kind: 'stones' },
-  { a: 4, b: 9, kind: 'mover' },
-]
-
-const STONE = 1.8
-const MAX_GAP = 2.3
-const MAX_RISE = 1.05
-
-export const PALETTE = {
-  skyTop: new THREE.Color('#2f6fd6'),
-  horizon: new THREE.Color('#ffd9b0'),
-  grass: new THREE.Color('#79cf6e'),
-  grassDark: new THREE.Color('#4fae5e'),
-  rock: new THREE.Color('#8b6b58'),
-  rockDark: new THREE.Color('#5d4639'),
-  stone: new THREE.Color('#e3cfa6'),
-  leaf: [new THREE.Color('#3f9a57'), new THREE.Color('#5bb85d'), new THREE.Color('#e0a44a')],
-  trunk: new THREE.Color('#7a4f35'),
-  crystal: new THREE.Color('#7ee8ff'),
+export function fitModel(source: THREE.Object3D, axis: 'x' | 'y' | 'z', size: number, opts: { shadow?: boolean; receive?: boolean } = {}): THREE.Group {
+  const model = source
+  model.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(model)
+  const dims = box.getSize(new THREE.Vector3())
+  const s = size / Math.max(1e-6, dims[axis])
+  model.scale.multiplyScalar(s)
+  model.updateMatrixWorld(true)
+  const b2 = new THREE.Box3().setFromObject(model)
+  const c = b2.getCenter(new THREE.Vector3())
+  model.position.x -= c.x
+  model.position.z -= c.z
+  model.position.y -= b2.min.y
+  model.traverse(o => {
+    const mesh = o as THREE.Mesh
+    if (mesh.isMesh) {
+      mesh.castShadow = opts.shadow ?? true
+      mesh.receiveShadow = opts.receive ?? true
+    }
+  })
+  const wrap = new THREE.Group()
+  wrap.add(model)
+  return wrap
 }
 
-/** Mulberry32: tiny deterministic RNG so the level never changes between loads. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+const SKY_VERT = `varying vec3 vDir;
+void main(){ vDir = normalize(position); vec4 p = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * p; gl_Position.z = gl_Position.w; }`
+
+const SKY_FRAG = `uniform float uNight; uniform vec3 uSunDir; uniform float uTime;
+varying vec3 vDir;
+float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+void main(){
+  vec3 d = normalize(vDir);
+  float h = d.y;
+  vec3 duskTop = vec3(0.07, 0.07, 0.20), duskMid = vec3(0.42, 0.20, 0.32), duskHor = vec3(1.05, 0.48, 0.20);
+  vec3 nightTop = vec3(0.004, 0.006, 0.025), nightMid = vec3(0.02, 0.025, 0.07), nightHor = vec3(0.09, 0.06, 0.12);
+  float n = clamp(uNight, 0.0, 1.0);
+  vec3 top = mix(duskTop, nightTop, n), mid = mix(duskMid, nightMid, n), hor = mix(duskHor, nightHor, smoothstep(0.0, 0.85, n));
+  float sunSide = clamp(dot(normalize(vec3(d.x, 0.0, d.z) + 1e-5), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))) * 0.5 + 0.5, 0.0, 1.0);
+  hor *= mix(0.45, 1.25, sunSide * sunSide);
+  vec3 col = mix(hor, mid, smoothstep(-0.02, 0.22, h));
+  col = mix(col, top, smoothstep(0.18, 0.75, h));
+  float sd = max(dot(d, normalize(uSunDir)), 0.0);
+  float dusk = 1.0 - smoothstep(0.0, 0.8, n);
+  col += vec3(1.2, 0.55, 0.2) * pow(sd, 6.0) * 0.55 * dusk;
+  col += vec3(2.4, 1.3, 0.55) * pow(sd, 380.0) * 2.2 * dusk;
+  vec3 g = floor(d * 260.0);
+  float st = hash(g);
+  float tw = 0.6 + 0.4 * sin(uTime * 2.0 + st * 40.0);
+  float star = step(0.9965, st) * smoothstep(0.04, 0.3, h) * smoothstep(0.25, 0.9, n) * tw;
+  col += vec3(0.9, 0.92, 1.0) * star * 1.6;
+  col = mix(col, hor * 0.35, smoothstep(0.0, -0.12, h));
+  gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`
+
+function makeSkyMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: { uNight: { value: 0 }, uSunDir: { value: LAYOUT.sunDir.clone() }, uTime: { value: 0 } },
+    vertexShader: SKY_VERT,
+    fragmentShader: SKY_FRAG,
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+  })
+}
+
+function groundTexture(): THREE.CanvasTexture {
+  const size = 1024
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  const g = c.getContext('2d')!
+  g.fillStyle = '#2f3a1f'
+  g.fillRect(0, 0, size, size)
+  let seed = 7
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+  for (let i = 0; i < 9000; i++) {
+    const x = rnd() * size, y = rnd() * size, r = 2 + rnd() * 10
+    const tone = rnd()
+    g.fillStyle = tone < 0.5 ? `rgba(58,72,34,${0.25 + rnd() * 0.3})` : tone < 0.8 ? `rgba(36,46,24,${0.3 + rnd() * 0.3})` : `rgba(84,82,44,${0.15 + rnd() * 0.2})`
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill()
   }
-}
-
-/**
- * Plan stepping stones between two islands so every hop fits the jump: the smallest count whose
- * edge-to-edge gap and per-hop rise are within MAX_GAP / MAX_RISE. Pure; unit tested.
- */
-export function planStones(a: Island, b: Island): { x: number; z: number; top: number }[] {
-  const dx = b.x - a.x
-  const dz = b.z - a.z
-  const d = Math.hypot(dx, dz)
-  const gap = d - a.r - b.r
-  const dy = b.top - a.top
-  let n = 0
-  while ((gap - n * STONE) / (n + 1) > MAX_GAP || Math.abs(dy) / (n + 1) > MAX_RISE) n += 1
-  const g = (gap - n * STONE) / (n + 1)
-  const out: { x: number; z: number; top: number }[] = []
-  for (let i = 1; i <= n; i += 1) {
-    const along = a.r + g * i + STONE * (i - 0.5)
-    out.push({ x: a.x + (dx / d) * along, z: a.z + (dz / d) * along, top: a.top + (dy * i) / (n + 1) })
+  // Packed-dirt clearing around the chopping stump and the walking paths.
+  const dirt = (cx: number, cy: number, rad: number, a: number) => {
+    const grd = g.createRadialGradient(cx, cy, 0, cx, cy, rad)
+    grd.addColorStop(0, `rgba(92,70,46,${a})`)
+    grd.addColorStop(0.6, `rgba(80,62,40,${a * 0.75})`)
+    grd.addColorStop(1, 'rgba(80,62,40,0)')
+    g.fillStyle = grd
+    g.beginPath(); g.arc(cx, cy, rad, 0, Math.PI * 2); g.fill()
   }
-  return out
+  const toPx = (x: number, z: number) => [size / 2 + (x / 60) * size, size / 2 + (z / 60) * size] as const
+  const [sx, sy] = toPx(0, -1.2)
+  dirt(sx, sy, 60, 0.95)
+  const [px, py] = toPx(-2.5, -2.3)
+  dirt(px, py, 30, 0.8)
+  for (let i = 0; i < 2600; i++) {
+    const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * 70
+    g.fillStyle = `rgba(${120 + rnd() * 40},${96 + rnd() * 30},${66 + rnd() * 20},${0.12 + rnd() * 0.2})`
+    g.fillRect(sx + Math.cos(a) * rr, sy + Math.sin(a) * rr, 1 + rnd() * 2, 1 + rnd() * 2)
+  }
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 4
+  return tex
 }
 
-export type MovingPlatform = {
-  mesh: THREE.Mesh
-  body: RAPIER.RigidBody
-  from: THREE.Vector3
-  to: THREE.Vector3
-  period: number
-  phase: number
-  /** Movement applied during the last fixed step; the player adds it while standing on top. */
-  delta: THREE.Vector3
-  half: THREE.Vector3
+/** Instanced grass blades with a wind sway added in the vertex shader. */
+function makeGrass(count: number, time: { value: number }): THREE.InstancedMesh {
+  const geo = new THREE.PlaneGeometry(0.06, 0.34, 1, 3)
+  geo.translate(0, 0.17, 0)
+  const pos = geo.attributes.position as THREE.BufferAttribute
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i)
+    pos.setX(i, pos.getX(i) * (1 - y / 0.36))
+  }
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, side: THREE.DoubleSide })
+  mat.onBeforeCompile = shader => {
+    shader.uniforms.uTime = time
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying float vH;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vH = clamp(position.y / 0.34, 0.0, 1.0);
+        vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+        float w = sin(uTime * 1.3 + ip.x * 0.55 + ip.z * 0.35) * 0.6 + sin(uTime * 2.7 + ip.x * 1.7) * 0.25;
+        transformed.x += w * 0.07 * vH * vH;
+        transformed.z += w * 0.03 * vH * vH;`)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vH;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= mix(0.3, 1.0, vH);')
+  }
+  const mesh = new THREE.InstancedMesh(geo, mat, count)
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3()
+  const color = new THREE.Color()
+  let seed = 11
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+  let placed = 0
+  while (placed < count) {
+    const a = rnd() * Math.PI * 2
+    const r = 1.2 + Math.sqrt(rnd()) * 17
+    const x = Math.cos(a) * r, z = Math.sin(a) * r - 1
+    if (Math.hypot(x - LAYOUT.stump.x, z - LAYOUT.stump.z) < 1.9 + rnd() * 0.8) continue
+    if (Math.hypot(x - LAYOUT.shrimpBlock.x, z - LAYOUT.shrimpBlock.z) < 1.0) continue
+    if (z < LAYOUT.fenceZ - 0.15 && z > LAYOUT.fenceZ - 0.5) continue
+    p.set(x, 0, z)
+    q.setFromEuler(new THREE.Euler((rnd() - 0.5) * 0.3, rnd() * Math.PI, (rnd() - 0.5) * 0.3))
+    const k = 0.6 + rnd() * 0.9
+    s.set(k, k * (0.7 + rnd() * 0.8), k)
+    m.compose(p, q, s)
+    mesh.setMatrixAt(placed, m)
+    color.setHSL(0.2 + rnd() * 0.07, 0.35 + rnd() * 0.2, 0.17 + rnd() * 0.1)
+    mesh.setColorAt(placed, color)
+    placed++
+  }
+  mesh.instanceMatrix.needsUpdate = true
+  mesh.receiveShadow = true
+  mesh.frustumCulled = false
+  return mesh
 }
-
-export type DroneRoute = { center: THREE.Vector3; radius: number; phase: number; dir: 1 | -1 }
 
 export class World {
   readonly scene = new THREE.Scene()
+  readonly time = { value: 0 }
+  readonly colliders: Collider[] = []
+  readonly spots: Spot[] = []
+  readonly sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>
+  readonly hemi: THREE.HemisphereLight
   readonly sun: THREE.DirectionalLight
-  readonly spawn = new THREE.Vector3(0, 1.2, 3)
-  readonly coreSpots: THREE.Vector3[] = []
-  readonly droneRoutes: DroneRoute[] = []
-  readonly movers: MovingPlatform[] = []
-  private clouds: THREE.Object3D[] = []
+  readonly moon: THREE.DirectionalLight
+  readonly lanternLight: THREE.PointLight
+  readonly lanternFlame: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
+  readonly lanternHalo: THREE.Sprite
+  readonly lanternRoot: THREE.Group
+  readonly stump: THREE.Group
+  readonly logOnStump: THREE.Group
+  readonly shrimpBlock: THREE.Group
+  readonly fog: THREE.Fog
+  lanternLevel: LanternLevel = 2
+  private lanternShown = 0
+  private grass?: THREE.InstancedMesh
 
-  constructor(private readonly physics: Physics, shadowMapSize: number) {
-    const random = rng(1337)
-    this.scene.background = PALETTE.horizon.clone()
-    this.scene.fog = new THREE.Fog(PALETTE.horizon, 45, 150)
+  constructor(private readonly models: Models, quality: 'low' | 'medium' | 'high') {
+    const scene = this.scene
+    this.fog = new THREE.Fog(0x4a3048, 14, 70)
+    scene.fog = this.fog
 
-    this.scene.add(this.makeSky())
-    this.scene.add(new THREE.HemisphereLight('#cfe8ff', '#6b5242', 1.0))
-    this.sun = new THREE.DirectionalLight('#fff0d8', 2.1)
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(400, 48, 24), makeSkyMaterial())
+    this.sky.frustumCulled = false
+    this.sky.renderOrder = -10
+    scene.add(this.sky)
+
+    this.hemi = new THREE.HemisphereLight(0xb87a8a, 0x2a2418, 0.9)
+    scene.add(this.hemi)
+    this.sun = new THREE.DirectionalLight(0xff9a55, 2.2)
+    this.sun.position.copy(LAYOUT.sunDir).multiplyScalar(30).add(new THREE.Vector3(0, 6, 0))
     this.sun.castShadow = true
-    this.sun.shadow.mapSize.set(shadowMapSize, shadowMapSize)
-    const cam = this.sun.shadow.camera
-    cam.left = cam.bottom = -26
-    cam.right = cam.top = 26
-    cam.near = 1
-    cam.far = 90
-    this.sun.shadow.bias = -0.0004
+    this.sun.shadow.camera.left = -12
+    this.sun.shadow.camera.right = 12
+    this.sun.shadow.camera.top = 12
+    this.sun.shadow.camera.bottom = -12
+    this.sun.shadow.camera.far = 80
+    this.sun.shadow.bias = -0.0006
     this.sun.shadow.normalBias = 0.03
-    this.scene.add(this.sun, this.sun.target)
+    this.sun.shadow.mapSize.set(2048, 2048)
+    scene.add(this.sun, this.sun.target)
+    this.moon = new THREE.DirectionalLight(0x8fa6ff, 0)
+    this.moon.position.set(-8, 20, 6)
+    scene.add(this.moon)
 
-    ISLANDS.forEach((island, i) => this.addIsland(island, i, random))
-    for (const link of LINKS) {
-      const a = ISLANDS[link.a]
-      const b = ISLANDS[link.b]
-      if (link.kind === 'stones') this.addStones(a, b, random)
-      else this.addMover(a, b, link.a * 7 + link.b)
-    }
-    this.addClouds(random)
-    this.addDistantIslands(random)
+    // Ground
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 64), new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 1 }))
+    ground.rotation.x = -Math.PI / 2
+    ground.receiveShadow = true
+    scene.add(ground)
+    this.grass = makeGrass(quality === 'low' ? 3500 : quality === 'medium' ? 7000 : 11000, this.time)
+    scene.add(this.grass)
 
-    // Patrol drones circle over the larger islands (never the spawn hub); the summit gets a tight guard.
-    for (const i of [1, 3, 5, 7]) {
-      const isl = ISLANDS[i]
-      this.droneRoutes.push({ center: new THREE.Vector3(isl.x, isl.top + 1.1, isl.z), radius: isl.r * 0.62, phase: random() * Math.PI * 2, dir: random() > 0.5 ? 1 : -1 })
+    this.buildHills()
+    this.buildTrees()
+    this.buildFences()
+
+    // Chopping stump with a fresh log on top.
+    this.stump = fitModel(models.stump.scene.clone(), 'x', 0.85)
+    this.stump.position.copy(LAYOUT.stump)
+    this.stump.rotation.y = 0.6
+    scene.add(this.stump)
+    this.logOnStump = this.makeLog(LAYOUT.logHeight)
+    this.logOnStump.position.set(LAYOUT.stump.x, LAYOUT.stumpTop - 0.01, LAYOUT.stump.z)
+    scene.add(this.logOnStump)
+    this.colliders.push({ x: LAYOUT.stump.x, z: LAYOUT.stump.z, r: 0.62 })
+
+    // The shrimp's own chopping block.
+    this.shrimpBlock = fitModel(models.stump.scene.clone(), 'x', 0.62)
+    this.shrimpBlock.position.copy(LAYOUT.shrimpBlock)
+    this.shrimpBlock.rotation.y = 2.1
+    scene.add(this.shrimpBlock)
+    const shrimpLog = this.makeLog(0.32)
+    shrimpLog.position.set(LAYOUT.shrimpBlock.x, 0.29, LAYOUT.shrimpBlock.z)
+    shrimpLog.rotation.y = 1.3
+    scene.add(shrimpLog)
+    this.colliders.push({ x: LAYOUT.shrimpBlock.x, z: LAYOUT.shrimpBlock.z, r: 0.45 })
+
+    // Rock seat
+    const rock = fitModel(models.rock.scene, 'x', 1.5)
+    rock.position.copy(LAYOUT.rock)
+    rock.rotation.y = 0.4
+    scene.add(rock)
+    this.colliders.push({ x: LAYOUT.rock.x, z: LAYOUT.rock.z, r: 0.85 })
+
+    // Oil lantern
+    this.lanternRoot = fitModel(models.lantern.scene, 'y', 0.52)
+    this.lanternRoot.position.copy(LAYOUT.lantern)
+    this.lanternRoot.rotation.y = -0.5
+    scene.add(this.lanternRoot)
+    this.lanternLight = new THREE.PointLight(0xffa04a, 4, 9, 1.6)
+    this.lanternLight.position.set(LAYOUT.lantern.x, 0.24, LAYOUT.lantern.z)
+    this.lanternLight.castShadow = quality !== 'low'
+    this.lanternLight.shadow.mapSize.set(512, 512)
+    this.lanternLight.shadow.bias = -0.002
+    this.lanternLight.shadow.camera.near = 0.15
+    scene.add(this.lanternLight)
+    this.lanternFlame = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 2.2, 0.8), toneMapped: true, fog: false }))
+    this.lanternFlame.scale.set(1, 1.7, 1)
+    this.lanternFlame.position.set(LAYOUT.lantern.x, 0.205, LAYOUT.lantern.z)
+    scene.add(this.lanternFlame)
+    this.lanternHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTexture(), color: 0xffa24c, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.6, fog: false }))
+    this.lanternHalo.scale.setScalar(0.9)
+    this.lanternHalo.position.set(LAYOUT.lantern.x, 0.22, LAYOUT.lantern.z)
+    scene.add(this.lanternHalo)
+    this.colliders.push({ x: LAYOUT.lantern.x, z: LAYOUT.lantern.z, r: 0.28 })
+
+    // Woodpile base: two rails on the ground so the stack looks deliberate.
+    const rail = this.makeLog(1.95)
+    rail.rotation.z = Math.PI / 2
+    rail.scale.set(0.1, 1, 0.1)
+    for (const dz of [-0.13, 0.13]) {
+      const r = rail.clone()
+      r.position.set(LAYOUT.pile.x + 0.975, 0.09, LAYOUT.pile.z + dz)
+      scene.add(r)
     }
-    const summit = ISLANDS[9]
-    this.droneRoutes.push({ center: new THREE.Vector3(summit.x, summit.top + 1.1, summit.z), radius: 1.9, phase: 0, dir: 1 })
+    this.colliders.push({ x: LAYOUT.pile.x - 0.55, z: LAYOUT.pile.z, r: 0.5 }, { x: LAYOUT.pile.x + 0.55, z: LAYOUT.pile.z, r: 0.5 })
+
+    this.spots.push(
+      { id: 'chop', kind: 'chop', x: LAYOUT.stump.x, z: LAYOUT.stump.z + 0.4, reach: 1.55 },
+      { id: 'lantern', kind: 'lantern', x: LAYOUT.lantern.x, z: LAYOUT.lantern.z, reach: 1.05 },
+      { id: 'rock', kind: 'sit', x: LAYOUT.rock.x, z: LAYOUT.rock.z, reach: 1.75 },
+      { id: 'fence', kind: 'sit', x: LAYOUT.fenceSeat.x, z: LAYOUT.fenceSeat.z + 0.35, reach: 1.3 },
+    )
   }
 
-  /** Per-frame ambience (clouds, shadow frustum follows the player). */
-  update(dt: number, focus: THREE.Vector3): void {
-    for (const c of this.clouds) {
-      c.position.x += dt * (c.userData.speed as number)
-      if (c.position.x > 120) c.position.x = -120
-    }
-    this.sun.position.set(focus.x + 18, focus.y + 34, focus.z + 12)
-    this.sun.target.position.copy(focus)
+  /** A log (stump-top sized) whose height is `h` metres, base at y=0. */
+  makeLog(h: number): THREE.Group {
+    return fitModel(this.models.log.scene.clone(), 'y', h)
   }
 
-  /** Advance moving platforms by one fixed step and record their movement. */
-  stepMovers(elapsed: number): void {
-    for (const m of this.movers) {
-      // Ease in-out ping-pong with a pause at each end so boarding is forgiving.
-      const t = ((elapsed + m.phase) % m.period) / m.period
-      const tri = t < 0.5 ? t * 2 : 2 - t * 2
-      const k = THREE.MathUtils.smootherstep(THREE.MathUtils.clamp((tri - 0.12) / 0.76, 0, 1), 0, 1)
-      const target = new THREE.Vector3().lerpVectors(m.from, m.to, k)
-      const cur = m.body.translation()
-      m.delta.set(target.x - cur.x, target.y - cur.y, target.z - cur.z)
-      m.body.setNextKinematicTranslation(target)
+  private readonly hillMeshes: THREE.Mesh[] = []
+
+  /** Height of the terrain (flat ground or hill surface) at x/z. */
+  groundHeight(x: number, z: number): number {
+    const ray = new THREE.Raycaster(new THREE.Vector3(x, 200, z), new THREE.Vector3(0, -1, 0), 0, 400)
+    let y = 0
+    for (const h of this.hillMeshes) {
+      h.updateMatrixWorld(true)
+      const hit = ray.intersectObject(h, false)[0]
+      if (hit) y = Math.max(y, hit.point.y)
     }
+    return y
   }
 
-  private makeSky(): THREE.Mesh {
-    const mat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false,
-      uniforms: {
-        top: { value: PALETTE.skyTop },
-        horizon: { value: PALETTE.horizon },
-        sunDir: { value: new THREE.Vector3(18, 34, 12).normalize() },
-      },
-      vertexShader: /* glsl */ `
-        varying vec3 vDir;
-        void main() {
-          vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir;
-        varying vec3 vDir;
-        void main() {
-          float h = clamp(vDir.y, -1.0, 1.0);
-          vec3 col = mix(horizon, top, pow(max(h, 0.0), 0.55));
-          col = mix(col, horizon * 0.92, smoothstep(0.0, -0.4, h));
-          float s = max(dot(normalize(vDir), sunDir), 0.0);
-          col += vec3(1.0, 0.85, 0.6) * (pow(s, 600.0) * 3.0 + pow(s, 12.0) * 0.25);
-          gl_FragColor = vec4(col, 1.0);
-          #include <colorspace_fragment>
-        }`,
-    })
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), mat)
-    sky.renderOrder = -1
-    return sky
-  }
-
-  private addIsland(isl: Island, index: number, random: () => number): void {
-    const group = new THREE.Group()
-    group.position.set(isl.x, isl.top, isl.z)
-
-    const topGeo = new THREE.CylinderGeometry(isl.r, isl.r * 0.94, 0.8, 22, 1)
-    const top = new THREE.Mesh(topGeo, flat(PALETTE.grass))
-    top.position.y = -0.4
-    top.receiveShadow = true
-    top.castShadow = true
-    group.add(top)
-
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(isl.r * 0.94, isl.r * 0.86, 0.6, 22, 1), flat(PALETTE.grassDark))
-    rim.position.y = -1.1
-    group.add(rim)
-
-    const under = new THREE.ConeGeometry(isl.r * 0.88, isl.r * 1.7 + 1.5, 14, 4)
-    jitter(under, random, 0.28 * isl.r * 0.35)
-    const rock = new THREE.Mesh(under, flat(PALETTE.rock))
-    rock.rotation.x = Math.PI
-    rock.position.y = -1.4 - (isl.r * 1.7 + 1.5) / 2
-    rock.castShadow = true
-    group.add(rock)
-    this.scene.add(group)
-
-    this.physics.addStaticCylinder(new THREE.Vector3(isl.x, isl.top - 0.4, isl.z), isl.r, 0.8)
-
-    // Core spots: spread around the island, away from the centre where the player lands.
-    for (let c = 0; c < isl.cores; c += 1) {
-      const angle = (c / isl.cores) * Math.PI * 2 + index * 1.3
-      const dist = isl.cores === 1 ? 0 : isl.r * 0.55
-      this.coreSpots.push(new THREE.Vector3(isl.x + Math.cos(angle) * dist, isl.top + 1.1, isl.z + Math.sin(angle) * dist))
-    }
-
-    if (isl.decor) {
-      const trees = Math.round(isl.r * 0.6)
-      for (let t = 0; t < trees; t += 1) {
-        const angle = random() * Math.PI * 2
-        const dist = isl.r * (0.68 + random() * 0.2)
-        this.addTree(isl.x + Math.cos(angle) * dist, isl.top, isl.z + Math.sin(angle) * dist, 0.6 + random() * 0.4, random)
-      }
-    }
-    for (let k = 0; k < 3; k += 1) {
-      const angle = random() * Math.PI * 2
-      const dist = isl.r * (0.8 + random() * 0.12)
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.22 + random() * 0.18, 0), glow(PALETTE.crystal, 2.4))
-      crystal.scale.y = 2.2
-      crystal.position.set(isl.x + Math.cos(angle) * dist, isl.top + 0.3, isl.z + Math.sin(angle) * dist)
-      crystal.rotation.set(random() * 0.4, random() * 3, random() * 0.4)
-      this.scene.add(crystal)
+  private buildHills(): void {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x1c2416, roughness: 1 })
+    const hills: Array<[number, number, number, number, number]> = [
+      [0, -26, -62, 40, 0.42], [-38, -20, -50, 30, 0.5], [40, -22, -54, 34, 0.45], [-60, -16, -10, 28, 0.6], [62, -18, -12, 30, 0.55],
+    ]
+    for (const [x, y, z, r, flat] of hills) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 40, 20), mat)
+      m.position.set(x, y, z)
+      m.scale.y = flat * 1.6
+      m.receiveShadow = false
+      this.scene.add(m)
+      this.hillMeshes.push(m)
     }
   }
 
-  private addTree(x: number, y: number, z: number, scale: number, random: () => number): void {
-    const tree = new THREE.Group()
-    tree.position.set(x, y, z)
-    tree.scale.setScalar(scale)
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.1, 6), flat(PALETTE.trunk))
-    trunk.position.y = 0.55
-    trunk.castShadow = true
-    tree.add(trunk)
-    const leafColor = PALETTE.leaf[Math.floor(random() * PALETTE.leaf.length)]
-    for (let i = 0; i < 2; i += 1) {
-      const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.75 - i * 0.2, 0), flat(leafColor))
-      leaves.position.set((random() - 0.5) * 0.2, 1.35 + i * 0.6, (random() - 0.5) * 0.2)
-      leaves.rotation.set(random(), random(), random())
-      leaves.castShadow = true
-      tree.add(leaves)
-    }
-    this.scene.add(tree)
-    this.physics.addStaticCylinder(new THREE.Vector3(x, y + 1.2 * scale, z), 0.28 * scale, 2.4 * scale)
-  }
-
-  private addStones(a: Island, b: Island, random: () => number): void {
-    const stones = planStones(a, b)
-    stones.forEach((s, i) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(STONE, 0.55, STONE), flat(PALETTE.stone))
-      const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI)
-      mesh.position.set(s.x, s.top - 0.275, s.z)
-      mesh.quaternion.copy(rot)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      const underside = new THREE.Mesh(new THREE.ConeGeometry(STONE * 0.62, 1.4, 5), flat(PALETTE.rockDark))
-      underside.rotation.x = Math.PI
-      underside.position.y = -0.95
-      mesh.add(underside)
-      this.scene.add(mesh)
-      this.physics.addStaticBox(mesh.position, new THREE.Vector3(STONE, 0.55, STONE), rot)
-      // Every other stone carries a core to pull the player along the route.
-      if (i % 2 === 1) this.coreSpots.push(new THREE.Vector3(s.x, s.top + 1.1, s.z))
-    })
-  }
-
-  private addMover(a: Island, b: Island, seed: number): void {
-    const dir = new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize()
-    const half = new THREE.Vector3(1.3, 0.25, 1.3)
-    const from = new THREE.Vector3(a.x, a.top - half.y, a.z).addScaledVector(dir, a.r + half.x + 0.25)
-    const to = new THREE.Vector3(b.x, b.top - half.y, b.z).addScaledVector(dir, -(b.r + half.x + 0.25))
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2, half.y * 2, half.z * 2), flat(new THREE.Color('#f2b84b')))
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2 + 0.02, 0.1, 0.35), glow(new THREE.Color('#ffefb0'), 3))
-    stripe.position.y = half.y - 0.02
-    mesh.add(stripe)
-    mesh.position.copy(from)
-    this.scene.add(mesh)
-    const body = this.physics.addKinematic(mesh, RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(1))
-    const period = Math.max(6, from.distanceTo(to) * 0.9)
-    this.movers.push({ mesh, body, from, to, period, phase: (seed % 5) * 0.7, delta: new THREE.Vector3(), half })
-  }
-
-  private addClouds(random: () => number): void {
-    // Unlit with baked top-to-bottom shading: soft and bright without tripping the bloom threshold.
-    const mat = new THREE.MeshBasicMaterial({ vertexColors: true })
-    for (let i = 0; i < 26; i += 1) {
-      const cloud = new THREE.Group()
-      const puffs = 3 + Math.floor(random() * 4)
-      for (let p = 0; p < puffs; p += 1) {
-        const puff = new THREE.Mesh(shadeCloud(new THREE.IcosahedronGeometry(1.4 + random() * 1.6, 1)), mat)
-        puff.position.set(p * 1.6 - puffs * 0.8, random() * 0.8, (random() - 0.5) * 1.6)
-        puff.scale.y = 0.62
-        cloud.add(puff)
-      }
-      const low = random() < 0.6
-      cloud.position.set((random() - 0.5) * 240, low ? -14 - random() * 12 : 18 + random() * 16, (random() - 0.5) * 200)
-      cloud.scale.setScalar(low ? 2.4 + random() * 2 : 1.2 + random())
-      cloud.userData.speed = 0.6 + random() * 0.8
-      this.clouds.push(cloud)
-      this.scene.add(cloud)
+  private buildTrees(): void {
+    const base = this.models.tree.scene
+    const spots: Array<[number, number, number, number]> = [
+      [-14, -24, 9, 0.2], [-6, -27, 11, 1.3], [5, -26, 10, 2.2], [13, -23, 8.5, 0.8], [22, -28, 12, 1.7], [-24, -22, 9, 2.6],
+      [-12, -9, 6.5, 0.5], [12.5, -8.5, 7, 2.9], [-17, 2, 7.5, 1.1], [17, 3, 8, 0.3], [30, -35, 13, 1.9], [-32, -33, 12, 0.9],
+    ]
+    for (const [x, z, h, rot] of spots) {
+      const t = fitModel(base.clone(), 'y', h, { shadow: Math.hypot(x, z) < 16, receive: false })
+      // Plant on the real terrain: sample the trunk footprint and use the lowest point so no
+      // side of the trunk floats on a slope, then sink the base slightly.
+      const r = 0.5
+      const ys = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]].map(([dx, dz]) => this.groundHeight(x + dx, z + dz))
+      t.position.set(x, Math.min(...ys) - 0.35, z)
+      t.rotation.y = rot
+      this.scene.add(t)
+      if (Math.hypot(x, z) < 16) this.colliders.push({ x, z, r: 0.6 })
     }
   }
 
-  private addDistantIslands(random: () => number): void {
-    for (let i = 0; i < 9; i += 1) {
-      const angle = (i / 9) * Math.PI * 2 + random() * 0.4
-      const dist = 75 + random() * 35
-      const r = 5 + random() * 7
-      const g = new THREE.Group()
-      const top = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, 1.2, 12), flat(PALETTE.grassDark))
-      const under = new THREE.ConeGeometry(r * 0.85, r * 2.2, 9, 2)
-      jitter(under, random, r * 0.12)
-      const rock = new THREE.Mesh(under, flat(PALETTE.rockDark))
-      rock.rotation.x = Math.PI
-      rock.position.y = -r * 1.1 - 0.6
-      g.add(top, rock)
-      g.position.set(Math.cos(angle) * dist, -6 + random() * 22, Math.sin(angle) * dist)
-      this.scene.add(g)
+  private buildFences(): void {
+    const seg = 2.4
+    const proto = fitModel(this.models.fence.scene, 'z', seg)
+    for (let i = -4; i < 4; i++) {
+      const f = proto.clone()
+      f.position.set((i + 0.5) * seg, 0, LAYOUT.fenceZ)
+      f.rotation.y = Math.PI / 2
+      this.scene.add(f)
     }
+    for (let i = 0; i < 4; i++) {
+      const f = proto.clone()
+      f.position.set(LAYOUT.sideFenceX, 0, LAYOUT.fenceZ + 1.2 + i * seg)
+      this.scene.add(f)
+    }
+  }
+
+  setLantern(level: LanternLevel): void {
+    this.lanternLevel = level
+  }
+
+  /** Per-frame atmosphere: night depth drives sky, fog, lights; the lantern flickers. */
+  update(dt: number, night: number, reducedMotion: boolean): void {
+    this.time.value += dt
+    const t = this.time.value
+    const n = night
+    const sky = this.sky.material.uniforms
+    sky.uNight.value = n
+    sky.uTime.value = t
+    const fogDusk = new THREE.Color(0x5a3446), fogNight = new THREE.Color(0x0b0d1c)
+    this.fog.color.copy(fogDusk).lerp(fogNight, n)
+    this.fog.near = 14 + n * 4
+    this.fog.far = 70 - n * 25
+    this.hemi.color.set(0xc08090).lerp(new THREE.Color(0x3a4a80), n)
+    this.hemi.groundColor.set(0x2e2416).lerp(new THREE.Color(0x0c0c14), n)
+    this.hemi.intensity = 0.95 - n * 0.6
+    this.sun.intensity = Math.max(0, 2.3 * (1 - n * 1.15))
+    this.sun.color.set(0xff9a55).lerp(new THREE.Color(0xff5e3a), Math.min(1, n * 1.4))
+    this.moon.intensity = n * 0.55
+    const target = lanternIntensity(this.lanternLevel, n)
+    this.lanternShown += (target - this.lanternShown) * Math.min(1, dt * 4)
+    const flicker = reducedMotion ? 1 : 0.9 + Math.sin(t * 13.0) * 0.04 + Math.sin(t * 7.3 + 1.7) * 0.05 + Math.sin(t * 23.1) * 0.02
+    this.lanternLight.intensity = this.lanternShown * flicker
+    const glow = this.lanternShown / 7
+    this.lanternFlame.visible = this.lanternShown > 0.05
+    this.lanternFlame.material.color.setRGB(4.5 * glow * flicker + 0.2, 2.4 * glow * flicker + 0.1, 0.8 * glow + 0.02)
+    this.lanternHalo.material.opacity = Math.min(0.8, glow * 0.9) * flicker
+    this.lanternHalo.scale.setScalar(0.6 + glow * 0.8)
   }
 }
 
-const materialCache = new Map<string, THREE.Material>()
-function flat(color: THREE.Color): THREE.MeshStandardMaterial {
-  const key = `flat:${color.getHexString()}`
-  let m = materialCache.get(key) as THREE.MeshStandardMaterial | undefined
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.92, metalness: 0 })
-    materialCache.set(key, m)
-  }
-  return m
+let halo: THREE.Texture | undefined
+export function haloTexture(): THREE.Texture {
+  if (halo) return halo
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')!
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64)
+  grd.addColorStop(0, 'rgba(255,255,255,1)')
+  grd.addColorStop(0.25, 'rgba(255,255,255,0.45)')
+  grd.addColorStop(1, 'rgba(255,255,255,0)')
+  g.fillStyle = grd
+  g.fillRect(0, 0, 128, 128)
+  halo = new THREE.CanvasTexture(c)
+  return halo
 }
 
-export function glow(color: THREE.Color, intensity: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, flatShading: true, roughness: 0.3 })
-}
-
-function shadeCloud(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = geo.attributes.position
-  geo.computeBoundingBox()
-  const { min, max } = geo.boundingBox!
-  const colors = new Float32Array(pos.count * 3)
-  const top = new THREE.Color('#ffffff')
-  const bottom = new THREE.Color('#c9cfe6')
-  const c = new THREE.Color()
-  for (let i = 0; i < pos.count; i += 1) {
-    c.lerpColors(bottom, top, (pos.getY(i) - min.y) / (max.y - min.y))
-    colors.set([c.r, c.g, c.b], i * 3)
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  return geo
-}
-
-/** Displace vertices so primitives read as hand-carved rock, keeping shared seams closed. */
-function jitter(geo: THREE.BufferGeometry, random: () => number, amount: number): void {
-  const pos = geo.attributes.position as THREE.BufferAttribute
-  const offsets = new Map<string, THREE.Vector3>()
-  const v = new THREE.Vector3()
-  for (let i = 0; i < pos.count; i += 1) {
-    v.fromBufferAttribute(pos, i)
-    const key = `${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)}`
-    let o = offsets.get(key)
-    if (!o) {
-      o = new THREE.Vector3((random() - 0.5) * amount, (random() - 0.5) * amount, (random() - 0.5) * amount)
-      offsets.set(key, o)
-    }
-    pos.setXYZ(i, v.x + o.x, v.y + o.y, v.z + o.z)
-  }
-  geo.computeVertexNormals()
+/** Dusk-tinted environment map so PBR props pick up warm reflections instead of black. */
+export function duskEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
+  const pm = new THREE.PMREMGenerator(renderer)
+  const envScene = new THREE.Scene()
+  const mat = makeSkyMaterial()
+  mat.uniforms.uNight.value = 0.15
+  envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), mat))
+  const rt = pm.fromScene(envScene, 0.02)
+  pm.dispose()
+  return rt.texture
 }

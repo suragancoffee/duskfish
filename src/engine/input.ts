@@ -19,13 +19,16 @@ const KEY_BINDINGS: Record<Action, string[]> = {
 }
 const MOVE_KEYS = { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] }
 // Standard gamepad mapping: A=0, B=1, X=2, Y=3, LB=4, RB=5, RT=7, Start=9, L3=10.
-const PAD_BINDINGS: Record<Action, number[]> = { jump: [0], sprint: [4, 10], dash: [2, 5, 7], pause: [9], confirm: [0], back: [1], interact: [3] }
+const PAD_BINDINGS: Record<Action, number[]> = { jump: [0], sprint: [4, 10], dash: [5, 2], pause: [9], confirm: [0], back: [1], interact: [2, 3] }
 
 export class Input {
   /** Movement intent in [-1, 1]: x = strafe right, y = forward. */
   readonly move = { x: 0, y: 0 }
   /** Camera look delta accumulated since the last `endFrame()` (radians-ish units, pre-sensitivity). */
   readonly look = { x: 0, y: 0 }
+  /** Mouse-wheel zoom accumulated since the last `takeZoom()` (positive = zoom out). */
+  private zoom = 0
+  private dragging = false
   method: InputMethod = 'keyboard'
   /** Multiplies look deltas; settings screen writes it. */
   sensitivity = 1
@@ -43,6 +46,7 @@ export class Input {
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const on = <K extends keyof WindowEventMap>(target: Window | HTMLElement, type: K, fn: (e: WindowEventMap[K]) => void, opts?: AddEventListenerOptions) => {
+      if (typeof target.addEventListener !== 'function') return
       target.addEventListener(type, fn as EventListener, opts)
       this.listeners.push(() => target.removeEventListener(type, fn as EventListener, opts))
     }
@@ -62,15 +66,28 @@ export class Input {
     on(window, 'gamepaddisconnected', e => {
       if (e.gamepad.index === this.padIndex) this.resetPad()
     })
-    on(window, 'mousedown', e => {
-      // Left click dashes while the mouse is captured for camera look.
-      if (document.pointerLockElement === canvas && e.button === 0) this.pressed_.add('dash')
+    // Drag on the canvas to orbit the camera (no pointer lock: this is a cosy game).
+    on(canvas, 'mousedown', e => {
+      if (e.button === 0 || e.button === 2) this.dragging = true
     })
+    on(window, 'mouseup', () => (this.dragging = false))
+    on(window, 'blur', () => (this.dragging = false))
+    on(canvas, 'contextmenu', e => e.preventDefault())
     on(window, 'mousemove', e => {
-      if (document.pointerLockElement !== canvas) return
-      this.look.x += e.movementX * 0.0022
-      this.look.y += e.movementY * 0.0022
+      if (!this.dragging) return
+      this.look.x += e.movementX * 0.0045
+      this.look.y += e.movementY * 0.0045
     })
+    on(canvas, 'wheel', e => {
+      this.zoom += Math.sign(e.deltaY) * 0.6
+      e.preventDefault()
+    }, { passive: false })
+  }
+
+  takeZoom(): number {
+    const z = this.zoom
+    this.zoom = 0
+    return z
   }
 
   /** Request pointer lock for mouse look (must be called from a user gesture). */

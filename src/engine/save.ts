@@ -1,108 +1,85 @@
 /**
- * Versioned local save. Everything the player keeps between sessions lives in one JSON record so
- * it is easy to migrate. Corrupt or foreign data falls back to defaults instead of crashing.
+ * Versioned settings + gentle progress persisted to localStorage. Corrupt, missing or older data
+ * falls back to defaults per field so a bad write never bricks the game.
  */
-export type Locale = 'en' | 'zh-CN'
 export type Quality = 'low' | 'medium' | 'high'
-
-export type ScoreEntry = { name: string; score: number; seconds: number; at: number }
 
 export type SaveData = {
   version: 1
-  /** '' = never chosen; the game follows the browser language until the player picks one. */
-  locale: Locale | ''
   musicVolume: number
   sfxVolume: number
   muted: boolean
-  sensitivity: number
-  invertY: boolean
   quality: Quality
   reducedMotion: boolean
-  tutorialDone: boolean
-  playerName: string
-  leaderboard: ScoreEntry[]
+  sensitivity: number
+  invertY: boolean
+  /** Lifetime split pieces (never a score; just a cosy tally). */
+  wood: number
+  /** Lifetime seconds spent zoning out on the rock or fence. */
+  zoneSeconds: number
+  hintsSeen: boolean
 }
 
-export const SAVE_KEY = 'game3d.save'
-export const LEADERBOARD_SIZE = 10
+export const SAVE_KEY = 'duskfish.save.v1'
 
-export function defaultSave(): SaveData {
-  return {
-    version: 1,
-    locale: '',
-    musicVolume: 0.7,
-    sfxVolume: 0.8,
-    muted: false,
-    sensitivity: 1,
-    invertY: false,
-    quality: 'high',
-    reducedMotion: false,
-    tutorialDone: false,
-    playerName: 'PLAYER',
-    leaderboard: [],
-  }
-}
+export const DEFAULT_SAVE: Readonly<SaveData> = Object.freeze({
+  version: 1,
+  musicVolume: 0.7,
+  sfxVolume: 0.85,
+  muted: false,
+  quality: 'high',
+  reducedMotion: false,
+  sensitivity: 1,
+  invertY: false,
+  wood: 0,
+  zoneSeconds: 0,
+  hintsSeen: false,
+})
 
-const clamp01 = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback)
+const num = (v: unknown, min: number, max: number, fallback: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback
 
-/** Parse untrusted stored JSON into a valid SaveData (pure; unit tested). */
 export function parseSave(raw: string | null): SaveData {
-  const base = defaultSave()
-  if (!raw) return base
-  let data: Record<string, unknown>
+  let obj: Record<string, unknown> = {}
   try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return base
-    data = parsed as Record<string, unknown>
+    const parsed = raw ? JSON.parse(raw) : {}
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) obj = parsed as Record<string, unknown>
   } catch {
-    return base
+    obj = {}
   }
-  if (data.version !== 1) return base
-  const board = Array.isArray(data.leaderboard) ? data.leaderboard : []
+  const d = DEFAULT_SAVE
   return {
     version: 1,
-    locale: data.locale === 'en' || data.locale === 'zh-CN' ? data.locale : '',
-    musicVolume: clamp01(data.musicVolume, base.musicVolume),
-    sfxVolume: clamp01(data.sfxVolume, base.sfxVolume),
-    muted: data.muted === true,
-    sensitivity: typeof data.sensitivity === 'number' && data.sensitivity >= 0.2 && data.sensitivity <= 3 ? data.sensitivity : base.sensitivity,
-    invertY: data.invertY === true,
-    quality: data.quality === 'low' || data.quality === 'medium' || data.quality === 'high' ? data.quality : base.quality,
-    reducedMotion: data.reducedMotion === true,
-    tutorialDone: data.tutorialDone === true,
-    playerName: typeof data.playerName === 'string' && data.playerName.trim() ? data.playerName.trim().slice(0, 16) : base.playerName,
-    leaderboard: board
-      .filter((e): e is ScoreEntry => !!e && typeof e === 'object' && typeof (e as ScoreEntry).name === 'string' && Number.isFinite((e as ScoreEntry).score))
-      .map(e => ({ name: e.name.slice(0, 16), score: Math.max(0, Math.floor(e.score)), seconds: Number.isFinite(e.seconds) ? e.seconds : 0, at: Number.isFinite(e.at) ? e.at : 0 }))
-      .slice(0, LEADERBOARD_SIZE),
+    musicVolume: num(obj.musicVolume, 0, 1, d.musicVolume),
+    sfxVolume: num(obj.sfxVolume, 0, 1, d.sfxVolume),
+    muted: typeof obj.muted === 'boolean' ? obj.muted : d.muted,
+    quality: obj.quality === 'low' || obj.quality === 'medium' || obj.quality === 'high' ? obj.quality : d.quality,
+    reducedMotion: typeof obj.reducedMotion === 'boolean' ? obj.reducedMotion : d.reducedMotion,
+    sensitivity: num(obj.sensitivity, 0.2, 3, d.sensitivity),
+    invertY: typeof obj.invertY === 'boolean' ? obj.invertY : d.invertY,
+    wood: Math.floor(num(obj.wood, 0, 1e9, d.wood)),
+    zoneSeconds: num(obj.zoneSeconds, 0, 1e9, d.zoneSeconds),
+    hintsSeen: typeof obj.hintsSeen === 'boolean' ? obj.hintsSeen : d.hintsSeen,
   }
-}
-
-/** Insert a run into a bounded, deterministically ordered leaderboard (higher score, then faster, then earlier). */
-export function insertScore(board: ScoreEntry[], entry: ScoreEntry): { board: ScoreEntry[]; rank: number } {
-  const next = [...board, entry].sort((a, b) => b.score - a.score || a.seconds - b.seconds || a.at - b.at).slice(0, LEADERBOARD_SIZE)
-  return { board: next, rank: next.indexOf(entry) }
 }
 
 export class SaveStore {
   data: SaveData
-
-  constructor(private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = globalThis.localStorage) {
+  constructor(private readonly key = SAVE_KEY) {
     let raw: string | null = null
     try {
-      raw = this.storage?.getItem(SAVE_KEY) ?? null
+      raw = localStorage.getItem(key)
     } catch {
       raw = null
     }
     this.data = parseSave(raw)
   }
-
   update(patch: Partial<SaveData>): void {
-    this.data = { ...this.data, ...patch }
+    this.data = parseSave(JSON.stringify({ ...this.data, ...patch }))
     try {
-      this.storage?.setItem(SAVE_KEY, JSON.stringify(this.data))
+      localStorage.setItem(this.key, JSON.stringify(this.data))
     } catch {
-      // Private browsing or quota: the game keeps working with in-memory settings.
+      // Private mode / quota: keep running with in-memory settings.
     }
   }
 }

@@ -1,62 +1,32 @@
 /**
- * All gameplay tuning in one place. Change numbers here before touching game code; tests read
- * the same values so rule changes stay covered.
+ * Tunable numbers for the dusk ranch. `CONFIG` is live (the tuning panel writes into it);
+ * `DEFAULT_CONFIG` keeps the shipped values for comparison and reset.
  */
-export const DEFAULT_CONFIG = {
-  run: {
-    seconds: 150,
-    lives: 3,
-    /** Seconds of invulnerability after a hit. */
-    invulnerable: 1.6,
-    /** Falling below this height costs a life and respawns at the last checkpoint. */
-    killY: -18,
-  },
-  score: {
-    core: 100,
-    /** Consecutive pickups within `comboWindow` seconds raise the multiplier up to `comboMax`. */
-    comboWindow: 3.5,
-    comboMax: 5,
-    /** Bonus per second left on the clock when every core is collected. */
-    timeBonus: 25,
-    lifeBonus: 500,
-  },
+const defaults = {
   player: {
-    radius: 0.42,
-    halfHeight: 0.5,
-    walkSpeed: 7,
-    sprintSpeed: 11,
-    acceleration: 60,
-    airControl: 0.45,
-    jumpSpeed: 10.5,
-    gravity: -30,
-    /** Extra gravity when the jump button is released early, for variable jump height. */
-    lowJumpGravity: -58,
-    maxFall: -40,
-    coyoteTime: 0.12,
-    jumpBuffer: 0.14,
-    dashSpeed: 22,
-    dashTime: 0.16,
-    dashCooldown: 0.9,
-    turnSpeed: 14,
+    /** Slow, swaggering western amble. */
+    walkSpeed: 1.8,
+    /** Holding Shift: a brisker trot. */
+    trotSpeed: 3.0,
+    turnRate: 7,
+    strideLength: 0.62,
   },
   camera: {
-    distance: 6.4,
+    fov: 48,
+    distance: 6.2,
     height: 2.4,
-    minPitch: -0.35,
-    maxPitch: 1.1,
-    follow: 10,
-    fov: 62,
+    follow: 5,
   },
-  drones: {
-    speed: 3.2,
-    radius: 0.7,
-    /** Drones speed up as the clock runs down. */
-    rageSpeed: 5,
-    rageAt: 45,
+  world: {
+    /** Real minutes for dusk to fall into deep night. */
+    nightMinutes: 6,
+    /** Slow-motion factor at the moment the axe bites. */
+    slowMotion: 0.22,
   },
-} as const
+}
 
-// Gameplay always reads active values here. Source defaults remain immutable for
-// Tweak Reset and Save with Manus; Apply never writes source or local storage.
-type MutableConfig<T> = { -readonly [K in keyof T]: T[K] extends number ? number : T[K] extends object ? MutableConfig<T[K]> : T[K] }
-export const CONFIG: MutableConfig<typeof DEFAULT_CONFIG> = structuredClone(DEFAULT_CONFIG)
+type Config = typeof defaults
+const clone = (c: Config): Config => JSON.parse(JSON.stringify(c)) as Config
+
+export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze(clone(defaults))
+export const CONFIG: Config = clone(defaults)
