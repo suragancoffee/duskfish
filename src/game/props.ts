@@ -34,6 +34,8 @@ export class Campfire {
   readonly group = new THREE.Group()
   readonly light: THREE.PointLight
   readonly flames: PointPool
+  /** Extra fuel from fed logs, 0..1; burns down over ~90 s per full load. */
+  fuel = 0
   private t = 0
 
   constructor(models: Models, colliders: Collider[]) {
@@ -79,24 +81,31 @@ export class Campfire {
     colliders.push({ x: c.x, z: c.z, r: 0.55 }, { x: CAMPFIRE.seat.x - 0.35, z: CAMPFIRE.seat.z + 0.05, r: 0.25 }, { x: CAMPFIRE.seat.x + 0.35, z: CAMPFIRE.seat.z + 0.05, r: 0.25 })
   }
 
+  /** One log onto the fire. */
+  feed(): void {
+    this.fuel = Math.min(1, this.fuel + 0.34)
+  }
+
   setViewport(scale: number): void {
     this.flames.material.uniforms.uScale.value = scale
   }
 
   update(dt: number, night: number, emitSmoke: (p: THREE.Vector3) => void, ember: (p: THREE.Vector3, v: THREE.Vector3) => void): void {
     this.t += dt
+    this.fuel = Math.max(0, this.fuel - dt / 90)
+    const F = this.fuel
     const c = CAMPFIRE.pos
-    const n = Math.min(14, Math.floor(dt * 110 + Math.random()))
+    const n = Math.min(26, Math.floor(dt * 110 * (1 + F * 1.2) + Math.random()))
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, r = Math.random() * 0.14
-      this.flames.emit({ x: c.x + Math.cos(a) * r, y: 0.05, z: c.z + Math.sin(a) * r, vx: -Math.cos(a) * 0.12, vy: 0.5 + Math.random() * 0.45, vz: -Math.sin(a) * 0.12,
-        life: 0.5 + Math.random() * 0.45, size: 0.34 + Math.random() * 0.2, grow: -0.42, alpha: 0.8, drag: 1.2, lift: 0.35 })
+      const a = Math.random() * Math.PI * 2, r = Math.random() * (0.14 + F * 0.08)
+      this.flames.emit({ x: c.x + Math.cos(a) * r, y: 0.05, z: c.z + Math.sin(a) * r, vx: -Math.cos(a) * 0.12, vy: (0.5 + Math.random() * 0.45) * (1 + F * 0.45), vz: -Math.sin(a) * 0.12,
+        life: 0.5 + Math.random() * 0.45, size: (0.34 + Math.random() * 0.2) * (1 + F * 0.55), grow: -0.42, alpha: 0.8, drag: 1.2, lift: 0.35 })
     }
     this.flames.update(dt, new THREE.Vector3(0.05, 0, 0.02), k => (1 - k) * Math.min(1, k * 8))
-    if (Math.random() < dt * 7) ember(new THREE.Vector3(c.x, 0.3, c.z), new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.2 + Math.random(), (Math.random() - 0.5) * 0.4))
+    if (Math.random() < dt * (7 + F * 16)) ember(new THREE.Vector3(c.x, 0.3, c.z), new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.2 + Math.random(), (Math.random() - 0.5) * 0.4))
     if (Math.random() < dt * 2.5) emitSmoke(new THREE.Vector3(c.x, 0.8, c.z))
     const f = 0.85 + Math.sin(this.t * 11) * 0.06 + Math.sin(this.t * 17.3) * 0.05 + Math.random() * 0.06
-    this.light.intensity = (3.5 + night * 4) * f
+    this.light.intensity = (3.5 + night * 4) * f * (1 + F * 0.8)
   }
 }
 

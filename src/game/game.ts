@@ -11,6 +11,7 @@ import {
   PILE_CAPACITY, pushOutOfCircle, smooth, type LanternLevel, type Spot,
 } from './rules'
 import { Bar, BAR, Campfire, CAMPFIRE } from './props'
+import { Fireflies } from './ambient'
 import { Shrimp } from './shrimp'
 import { Tuna } from './tuna'
 import { duskEnvironment, LAYOUT, World, type Models } from './world'
@@ -114,6 +115,9 @@ export class Game {
   private strumKick = 0
   private sipT = 0
   private sips = 0
+  private readonly fireflies = new Fireflies()
+  private barVisitCd = 0
+  private danceCd = 0
   private greetT = 0
   private greetCool = 0
   private greetIdx = 0
@@ -182,6 +186,16 @@ export class Game {
       standAt: new THREE.Vector3(BAR.stool.x + 0.85, 0, BAR.stool.z + 0.2), promptKey: 'prompt.sit.bar' })
     this.world.spots.push({ id: 'bar', kind: 'sit', x: BAR.stool.x + 0.35, z: BAR.stool.z, reach: 1.1 })
     this.world.spots.push(this.shrimpSpot)
+    this.world.spots.push({ id: 'feed', kind: 'feed', x: CAMPFIRE.pos.x - 0.95, z: CAMPFIRE.pos.z, reach: 0.85 })
+    scene.add(this.fireflies.points)
+    this.shrimp.onToastArrive = () => {
+      if (this.seat?.id !== 'bar' || this.activity !== 'sitting') return
+      this.sipT = 0.25
+      window.setTimeout(() => {
+        this.audio.clink(0.32)
+        this.events.toast('toast.cheers')
+      }, 1000)
+    }
     this.guitar = makeGuitar(models.guitar)
     this.guitar.visible = false
     this.tuna.body.add(this.guitar)
@@ -210,6 +224,7 @@ export class Game {
   private promptFor(spot: Spot): string {
     if (spot.kind === 'chop') return this.t('prompt.chop')
     if (spot.kind === 'greet') return this.t('prompt.greet')
+    if (spot.kind === 'feed') return this.pile.count > 0 ? `${this.t('prompt.feed')} (${this.pile.count})` : this.t('prompt.feed.empty')
     if (spot.kind === 'lantern') return this.t(this.world.lanternLevel === 0 ? 'prompt.lantern.on' : this.world.lanternLevel === 1 ? 'prompt.lantern.up' : 'prompt.lantern.off')
     const seat = this.seats.find(s => s.id === spot.id)
     return this.t(seat?.promptKey ?? 'prompt.sit.rock')
@@ -262,10 +277,12 @@ export class Game {
       this.updateSmoke(dt)
       this.updateFlyers(dt)
       this.fx.update(dt, this.night, this.elapsed)
+      this.fireflies.update(dt, this.night, this.world.lanternLevel)
+      this.updateVisits(dt)
       this.campfire.update(dt, this.night, p => this.fx.wisp(p, 3), (p, v) => this.fx.ember(p, v, 1.3))
       this.bar.update(this.elapsed, this.night)
       const fd = this.tuna.root.position.distanceTo(CAMPFIRE.pos)
-      this.audio.fire(playing ? Math.max(0, 1 - fd / 9) : 0.15, dt)
+      this.audio.fire((playing ? Math.max(0, 1 - fd / 9) : 0.15) * (1 + this.campfire.fuel * 0.6), dt)
       this.audio.setAmbience(0.45 + this.night * 0.55)
       if (playing && !this.nightHintShown && this.night > 0.62 && this.world.lanternLevel < 2) {
         this.nightHintShown = true
@@ -276,6 +293,7 @@ export class Game {
     this.updateCamera(realDt, dt)
     this.fx.setViewportHeight(this.renderer.canvas.clientHeight || window.innerHeight, this.camera.fov)
     this.campfire.setViewport((this.renderer.canvas.clientHeight || window.innerHeight) / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)))
+    this.fireflies.setViewport((this.renderer.canvas.clientHeight || window.innerHeight) / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)))
     this.renderer.render(this.world.scene, this.camera)
   }
 
@@ -376,6 +394,7 @@ export class Game {
 
   private interact(spot: Spot): void {
     if (spot.kind === 'greet') this.greet()
+    else if (spot.kind === 'feed') this.feedFire()
     else if (spot.kind === 'chop') this.beginChop()
     else if (spot.kind === 'lantern') {
       const next = nextLanternLevel(this.world.lanternLevel) as LanternLevel
@@ -389,6 +408,45 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- chopping
+  private feedFire(): void {
+    const c = CAMPFIRE.pos
+    this.tuna.heading = Math.atan2(c.x - this.tuna.root.position.x, c.z - this.tuna.root.position.z)
+    if (this.pile.count <= 0) {
+      this.events.toast('toast.feed.empty')
+      return
+    }
+    this.pile.setCount(this.pile.count - 1)
+    this.reservedSlots = Math.max(this.pile.count, this.reservedSlots - 1)
+    this.campfire.feed()
+    this.audio.play('stack', { volume: 0.6, rate: 0.8 })
+    for (let i = 0; i < 14; i++) {
+      this.fx.ember(new THREE.Vector3(c.x, 0.3, c.z), new THREE.Vector3((Math.random() - 0.5) * 1.2, 1.5 + Math.random() * 1.5, (Math.random() - 0.5) * 1.2), 1.6)
+    }
+    this.events.toast(this.campfire.fuel > 0.9 ? 'toast.feed.big' : 'toast.feed')
+  }
+
+  /** Shrimp comes over to clink glasses at the bar, or dances while the tuna strums. */
+  private updateVisits(dt: number): void {
+    const sitting = this.activity === 'sitting' && this.seat
+    this.barVisitCd -= dt
+    this.danceCd -= dt
+    if (!sitting) {
+      this.shrimp.leave()
+      return
+    }
+    if (this.seat!.id === 'bar' && this.sitT > 5 && this.barVisitCd <= 0) {
+      const to = new THREE.Vector3(BAR.stool.x + 0.45, 0, BAR.stool.z + 0.75)
+      if (this.shrimp.visit(to, BAR.stool, 'toast')) this.barVisitCd = 40
+      else this.barVisitCd = 3
+    } else if (this.seat!.id === 'campfire' && this.sitT > 2.5 && this.danceCd <= 0 && !this.shrimp.visiting) {
+      const to = new THREE.Vector3(CAMPFIRE.seat.x - 1.3, 0, CAMPFIRE.seat.z - 0.45)
+      if (this.shrimp.visit(to, CAMPFIRE.seat, 'dance')) this.events.toast('toast.dance')
+      this.danceCd = 3
+    } else if (this.seat!.id !== 'campfire' && this.seat!.id !== 'bar') {
+      this.shrimp.leave()
+    }
+  }
+
   private greet(): void {
     if (!this.shrimp.greet()) return
     this.greetT = 1.6

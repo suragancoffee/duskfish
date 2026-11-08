@@ -4,7 +4,7 @@ import { makeAxe } from './axe'
 import { angleDelta } from './rules'
 import { fitModel } from './world'
 
-type State = 'watch' | 'toBlock' | 'chop' | 'toWatch' | 'cheer' | 'wander'
+type State = 'watch' | 'toBlock' | 'chop' | 'toWatch' | 'cheer' | 'wander' | 'toVisit' | 'visit'
 
 const LENGTH = 1.15
 const CHOP_PERIOD = 2.4
@@ -37,6 +37,12 @@ export class Shrimp {
   private readonly watchSpot: THREE.Vector3
   private readonly wanderTo = new THREE.Vector3()
   private wanderPause = 0
+  private readonly visitTo = new THREE.Vector3()
+  private readonly visitFace = new THREE.Vector3()
+  private visitMode: 'toast' | 'dance' = 'toast'
+  private visitT = 0
+  /** Fires when the shrimp reaches the tuna for a toast. */
+  onToastArrive?: () => void
   private readonly chopSpot: THREE.Vector3
   private readonly blockTop: THREE.Vector3
 
@@ -186,8 +192,26 @@ export class Shrimp {
     this.cheerT = 0
     return true
   }
+  /** Walk over to `to`, face `face`, then raise a glass (toast) or dance until leave(). */
+  visit(to: THREE.Vector3, face: THREE.Vector3, mode: 'toast' | 'dance'): boolean {
+    if (this.state === 'cheer' || this.visiting) return false
+    this.axe.visible = false
+    this.visitTo.copy(to)
+    this.visitFace.copy(face)
+    this.visitMode = mode
+    this.state = 'toVisit'
+    return true
+  }
+  leave(): void {
+    if (!this.visiting) return
+    this.state = 'watch'
+    this.timer = 1.5 + Math.random()
+  }
+  get visiting(): boolean {
+    return this.state === 'toVisit' || this.state === 'visit'
+  }
   get canGreet(): boolean {
-    return this.state !== 'cheer' && this.state !== 'toBlock'
+    return this.state !== 'cheer' && this.state !== 'toBlock' && !this.visiting
   }
   cheer(): void {
     if (this.state !== 'watch') return
@@ -210,6 +234,7 @@ export class Shrimp {
     let pitch = 0
     let hop = 0
     let tail = 0
+    let roll = 0
     const walkTo = (target: THREE.Vector3, next: () => void) => {
       const d = new THREE.Vector3().subVectors(target, this.position)
       d.y = 0
@@ -294,6 +319,34 @@ export class Shrimp {
           }
         })
         break
+      case 'toVisit':
+        walkTo(this.visitTo, () => {
+          this.state = 'visit'
+          this.visitT = 0
+          if (this.visitMode === 'toast') this.onToastArrive?.()
+        })
+        break
+      case 'visit': {
+        this.visitT += dt
+        const f = new THREE.Vector3().subVectors(this.visitFace, this.position)
+        this.turnTo(Math.atan2(f.x, f.z), dt, 4)
+        const k = this.visitT
+        if (this.visitMode === 'toast') {
+          // Rear up with a claw raised, clink, settle, then head back to work.
+          pitch = -0.4 * Math.sin(Math.min(1, k / 2.6) * Math.PI)
+          tail = k > 1.0 && k < 1.5 ? 1 : 0
+          if (k > 3.2) this.leave()
+        } else {
+          // Swaying to the strum: bob, roll side to side, flick the tail, wiggle the legs.
+          const b = this.t * 4.6
+          hop = Math.abs(Math.sin(b)) * 0.05
+          roll = Math.sin(b * 0.5) * 0.16
+          pitch = -0.12 + Math.sin(b) * 0.07
+          tail = Math.max(0, Math.sin(b))
+          moving = true
+        }
+        break
+      }
       case 'toWatch':
         walkTo(this.watchSpot, () => {
           this.state = 'watch'
@@ -307,6 +360,7 @@ export class Shrimp {
     u.uWalk.value = this.walk
     u.uTail.value += (tail - u.uTail.value) * Math.min(1, dt * 10)
     this.pose.rotation.x = pitch
+    this.pose.rotation.z += (roll - this.pose.rotation.z) * Math.min(1, dt * 8)
     this.pose.position.y = hop + Math.abs(Math.sin(this.t * 14)) * 0.008 * this.walk
     this.root.position.copy(this.position)
     this.root.rotation.y = this.heading

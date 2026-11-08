@@ -77,5 +77,12 @@
   "greet.night.3": "새우: 랜턴 너무 밝히진 마. 반딧불이 숨어.",
   "greet.night.4": "새우: 오늘 하루도 고마웠어.",
   "greet.night.5": "새우: …졸리다. 근데 좀 더 있자.",
-  "prompt.chop.stop": "그만 패기"
+  "prompt.chop.stop": "그만 패기",
+  "prompt.feed": "모닥불에 장작 넣기",
+  "prompt.feed.empty": "장작더미가 비었어요",
+  "toast.feed.empty": "장작더미가 비었어요. 먼저 장작을 패 보세요.",
+  "toast.feed": "불이 한층 살아났어요.",
+  "toast.feed.big": "모닥불이 활활 타올라요!",
+  "toast.cheers": "새우: 건배! 오늘도 수고했어.",
+  "toast.dance": "새우가 기타 소리에 맞춰 리듬을 타요."
 }

@@ -76,8 +76,8 @@ void main(){
   vec3 g = floor(d * 260.0);
   float st = hash(g);
   float tw = 0.6 + 0.4 * sin(uTime * 2.0 + st * 40.0);
-  float star = step(0.9965, st) * smoothstep(0.04, 0.3, h) * smoothstep(0.25, 0.9, n) * tw;
-  col += vec3(0.9, 0.92, 1.0) * star * 1.6;
+  float star = step(0.993 - 0.003 * n, st) * smoothstep(0.03, 0.3, h) * smoothstep(0.2, 0.8, n) * tw;
+  col += vec3(0.9, 0.92, 1.0) * star * (1.4 + st * 1.6);
   col = mix(col, hor * 0.35, smoothstep(0.0, -0.12, h));
   gl_FragColor = vec4(max(col, vec3(0.0)), 1.0);
   #include <tonemapping_fragment>
