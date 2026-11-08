@@ -105,6 +105,12 @@ export class Game {
   private camYaw = 0.25
   private camPitch = 0.3
   private camDist = CONFIG.camera.distance
+  /** User orbit on top of the cinematic interaction cameras (drag to rotate, wheel to zoom). */
+  private ixYaw = 0
+  private ixPitch = 0
+  private ixZoom = 1
+  private ixActive = false
+  private ixDragT = 0
   private camPos = new THREE.Vector3(6, 3, 8)
   private camLook = new THREE.Vector3(0, 1, -2)
   private nearest: Spot | null = null
@@ -798,8 +804,6 @@ export class Game {
     this.sitT += dt
     tuna.update(dt, 0, this.reducedMotion)
     tuna.pitch = -0.08 + Math.sin(this.sitT * 0.4) * 0.03
-    this.input.takeLook()
-    this.input.takeZoom()
     if (this.seat?.id === 'campfire') this.playGuitar(dt)
     if (this.seat?.id === 'bar') this.drinkWhisky(dt)
     // Smoke rhythm: inhale (ember brightens), hold, exhale a puff.
@@ -993,6 +997,38 @@ export class Game {
       pos = target.clone().add(new THREE.Vector3(Math.sin(this.camYaw) * d * cp, d * sp + (CONFIG.camera.height - 2.4) * 0.5, Math.cos(this.camYaw) * d * cp))
       pos.y = Math.max(0.5, pos.y)
       look = target.add(new THREE.Vector3(-Math.sin(this.camYaw) * 1.2, 0.35, -Math.cos(this.camYaw) * 1.2))
+    }
+    // Interactions keep their cinematic framing, but the player can orbit and zoom around it.
+    const interacting = this.mode !== 'title' && (this.activity === 'chop' || (!!this.seat && (this.activity === 'sitting' || this.activity === 'sitIn')))
+    if (interacting) {
+      if (!this.ixActive) {
+        this.ixActive = true
+        this.ixYaw = 0
+        this.ixPitch = 0
+        this.ixZoom = 1
+        this.input.takeLook()
+        this.input.takeZoom()
+      }
+      const lk = this.input.takeLook()
+      const z = this.input.takeZoom()
+      if (lk.x !== 0 || lk.y !== 0 || z !== 0) this.ixDragT = 0.4
+      this.ixDragT = Math.max(0, this.ixDragT - realDt)
+      this.ixYaw -= lk.x
+      this.ixPitch = THREE.MathUtils.clamp(this.ixPitch + lk.y * 0.6, -0.6, 0.9)
+      this.ixZoom = THREE.MathUtils.clamp(this.ixZoom + z * 0.08, 0.45, 2.2)
+      const pivot = this.activity === 'chop'
+        ? new THREE.Vector3(LAYOUT.stump.x, 0.8, LAYOUT.stump.z)
+        : new THREE.Vector3(this.seat!.pos.x, this.seat!.rootY + 0.5, this.seat!.pos.z)
+      const sph = new THREE.Spherical().setFromVector3(pos.clone().sub(pivot))
+      sph.theta += this.ixYaw
+      sph.phi = THREE.MathUtils.clamp(sph.phi - this.ixPitch, 0.2, 1.52)
+      sph.radius *= this.ixZoom
+      pos = pivot.clone().add(new THREE.Vector3().setFromSpherical(sph))
+      pos.y = Math.max(0.35, pos.y)
+      look = pivot.clone().add(look.clone().sub(pivot).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.ixYaw))
+      if (this.ixDragT > 0) rate = Math.max(rate, 7)
+    } else if (this.ixActive) {
+      this.ixActive = false
     }
     const k = 1 - Math.exp(-rate * realDt)
     this.camPos.lerp(pos, k)
