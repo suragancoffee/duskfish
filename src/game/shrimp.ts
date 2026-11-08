@@ -41,6 +41,8 @@ export class Shrimp {
   private readonly visitFace = new THREE.Vector3()
   private visitMode: 'toast' | 'dance' = 'toast'
   private visitT = 0
+  /** Height the shrimp is perched at (a stool top during a bar toast). */
+  private elev = 0
   /** Fires when the shrimp reaches the tuna for a toast. */
   onToastArrive?: () => void
   private readonly chopSpot: THREE.Vector3
@@ -333,9 +335,11 @@ export class Shrimp {
         const k = this.visitT
         if (this.visitMode === 'toast') {
           // Rear up with a claw raised, clink, settle, then head back to work.
-          pitch = -0.4 * Math.sin(Math.min(1, k / 2.6) * Math.PI)
-          tail = k > 1.0 && k < 1.5 ? 1 : 0
-          if (k > 3.2) this.leave()
+          // Hop onto the stool, settle, rear up with a claw raised to clink, then hop down.
+          const r = k - 0.6
+          pitch = r > 0 ? -0.4 * Math.sin(Math.min(1, r / 2.8) * Math.PI) : 0
+          tail = r > 1.0 && r < 1.5 ? 1 : 0
+          if (k > 5) this.leave()
         } else {
           // Swaying to the strum: bob, roll side to side, flick the tail, wiggle the legs.
           const b = this.t * 4.6
@@ -361,8 +365,14 @@ export class Shrimp {
     u.uTail.value += (tail - u.uTail.value) * Math.min(1, dt * 10)
     this.pose.rotation.x = pitch
     this.pose.rotation.z += (roll - this.pose.rotation.z) * Math.min(1, dt * 8)
-    this.pose.position.y = hop + Math.abs(Math.sin(this.t * 14)) * 0.008 * this.walk
+    // Perch: arc up to the visit height while visiting, back down otherwise.
+    const wantElev = this.state === 'visit' ? this.visitTo.y : 0
+    const dE = wantElev - this.elev
+    this.elev += Math.sign(dE) * Math.min(Math.abs(dE), dt * 2.2)
+    const arc = Math.abs(dE) > 0.01 ? Math.sin((this.elev / Math.max(0.01, Math.max(wantElev, this.visitTo.y))) * Math.PI) * 0.18 : 0
+    this.pose.position.y = hop + arc + Math.abs(Math.sin(this.t * 14)) * 0.008 * this.walk
     this.root.position.copy(this.position)
+    this.root.position.y += this.elev
     this.root.rotation.y = this.heading
   }
 

@@ -190,11 +190,11 @@ export class Game {
     scene.add(this.fireflies.points)
     this.shrimp.onToastArrive = () => {
       if (this.seat?.id !== 'bar' || this.activity !== 'sitting') return
-      this.sipT = 0.25
+      window.setTimeout(() => { this.sipT = 0.25 }, 600)
       window.setTimeout(() => {
         this.audio.clink(0.32)
         this.events.toast('toast.cheers')
-      }, 1000)
+      }, 1700)
     }
     this.guitar = makeGuitar(models.guitar)
     this.guitar.visible = false
@@ -435,7 +435,7 @@ export class Game {
       return
     }
     if (this.seat!.id === 'bar' && this.sitT > 5 && this.barVisitCd <= 0) {
-      const to = new THREE.Vector3(BAR.stool.x + 0.45, 0, BAR.stool.z + 0.75)
+      const to = new THREE.Vector3(BAR.stool2.x, BAR.stoolTop, BAR.stool2.z)
       if (this.shrimp.visit(to, BAR.stool, 'toast')) this.barVisitCd = 40
       else this.barVisitCd = 3
     } else if (this.seat!.id === 'campfire' && this.sitT > 2.5 && this.danceCd <= 0 && !this.shrimp.visiting) {
