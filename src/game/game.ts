@@ -803,7 +803,7 @@ export class Game {
     g.position.lerpVectors(this.bar.drinkRest, mouth, lift)
     g.position.y += Math.sin(lift * Math.PI) * 0.06
     const axis = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize()
-    g.quaternion.setFromAxisAngle(axis, -(0.25 * lift + 0.85 * tilt))
+    g.quaternion.setFromAxisAngle(axis, 0.25 * lift + 0.85 * tilt)
     tuna.pitch = -0.08 - tilt * 0.12
     // Liquid drains during the tip; set-down clinks the ice.
     if (tilt > 0) this.bar.liquid.scale.y = Math.max(0.05, this.bar.liquid.scale.y - dt * 0.17)
