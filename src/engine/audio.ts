@@ -151,6 +151,69 @@ export class Audio {
     })
   }
 
+  /** Ice against glass: a few bright, quickly decaying partials. */
+  clink(gain = 0.25): void {
+    if (!this.ctx || !this.sfxBus) return
+    const t0 = this.ctx.currentTime + 0.005
+    for (const [f, d] of [[2900, 0.25], [4100, 0.18], [5300, 0.12]] as const) {
+      for (let k = 0; k < 2; k++) {
+        const o = this.ctx.createOscillator()
+        o.frequency.value = f * (0.97 + Math.random() * 0.06)
+        const g = this.ctx.createGain()
+        const t = t0 + k * (0.07 + Math.random() * 0.05)
+        g.gain.setValueAtTime(0, t)
+        g.gain.linearRampToValueAtTime(gain * (k ? 0.5 : 1) / 3, t + 0.003)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + d)
+        o.connect(g).connect(this.sfxBus)
+        o.start(t)
+        o.stop(t + d + 0.05)
+      }
+    }
+  }
+
+  /** Whisky pour: band-passed noise glugs. */
+  pour(gain = 0.3): void {
+    if (!this.ctx || !this.sfxBus) return
+    const len = Math.floor(this.ctx.sampleRate * 1.1)
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate)
+    const d = buf.getChannelData(0)
+    for (let i = 0; i < len; i++) {
+      const t = i / this.ctx.sampleRate
+      const glug = 0.55 + 0.45 * Math.sin(t * Math.PI * 2 * 7.5)
+      d[i] = (Math.random() * 2 - 1) * glug * Math.min(1, t * 12) * Math.min(1, (1.1 - t) * 6)
+    }
+    const src = this.ctx.createBufferSource()
+    src.buffer = buf
+    const bp = this.ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = 900
+    bp.Q.value = 1.4
+    const g = this.ctx.createGain()
+    g.gain.value = gain
+    src.connect(bp).connect(g).connect(this.sfxBus)
+    src.start()
+  }
+
+  /** Two-note friendly whistle for the shrimp's hello. */
+  chirp(gain = 0.18): void {
+    if (!this.ctx || !this.sfxBus) return
+    const t0 = this.ctx.currentTime + 0.01
+    ;[[880, 1320, 0], [1100, 1650, 0.16]].forEach(([a, b, dt]) => {
+      const o = this.ctx!.createOscillator()
+      o.type = 'triangle'
+      const t = t0 + dt
+      o.frequency.setValueAtTime(a, t)
+      o.frequency.exponentialRampToValueAtTime(b, t + 0.12)
+      const g = this.ctx!.createGain()
+      g.gain.setValueAtTime(0, t)
+      g.gain.linearRampToValueAtTime(gain, t + 0.02)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16)
+      o.connect(g).connect(this.sfxBus!)
+      o.start(t)
+      o.stop(t + 0.2)
+    })
+  }
+
   /** Campfire crackle: random filtered noise pops; call each frame with a 0..1 level. */
   fire(level: number, dt: number): void {
     if (!this.ctx || !this.sfxBus) return

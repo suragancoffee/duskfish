@@ -4,7 +4,7 @@ import { makeAxe } from './axe'
 import { angleDelta } from './rules'
 import { fitModel } from './world'
 
-type State = 'watch' | 'toBlock' | 'chop' | 'toWatch' | 'cheer'
+type State = 'watch' | 'toBlock' | 'chop' | 'toWatch' | 'cheer' | 'wander'
 
 const LENGTH = 1.15
 const CHOP_PERIOD = 2.4
@@ -28,13 +28,15 @@ export class Shrimp {
     uBounds: { value: new THREE.Vector4(0, 1, 0, 1) },
   }
   private walk = 0
-  private timer = 6
+  private timer = 2
   private chopT = 0
   private chopsLeft = 0
   private cheerT = 0
   private t = 0
   private readonly axe: THREE.Group
   private readonly watchSpot: THREE.Vector3
+  private readonly wanderTo = new THREE.Vector3()
+  private wanderPause = 0
   private readonly chopSpot: THREE.Vector3
   private readonly blockTop: THREE.Vector3
 
@@ -176,6 +178,17 @@ export class Shrimp {
     mat.needsUpdate = true
   }
 
+  /** Friendly hello: only from the idle watch pose; reuses the hop/tail-flick cheer. */
+  greet(): boolean {
+    if (this.state === 'cheer' || this.state === 'toBlock') return false
+    this.axe.visible = false
+    this.state = 'cheer'
+    this.cheerT = 0
+    return true
+  }
+  get canGreet(): boolean {
+    return this.state !== 'cheer' && this.state !== 'toBlock'
+  }
   cheer(): void {
     if (this.state !== 'watch') return
     this.state = 'cheer'
@@ -229,14 +242,14 @@ export class Shrimp {
         pitch = -0.25 * Math.max(0, Math.sin(k * 3.5))
         if (k > 2.4) {
           this.state = 'watch'
-          this.timer = 5 + Math.random() * 4
+          this.timer = 1.5 + Math.random() * 1.5
         }
         break
       }
       case 'toBlock':
         walkTo(this.chopSpot, () => {
           this.state = 'chop'
-          this.chopsLeft = 3
+          this.chopsLeft = 7 + Math.floor(Math.random() * 6)
           this.chopT = 0
           this.axe.visible = true
         })
@@ -256,12 +269,31 @@ export class Shrimp {
         if (c < pc) {
           this.chopsLeft--
           if (this.chopsLeft <= 0) {
-            this.state = 'toWatch'
             this.axe.visible = false
+            if (Math.random() < 0.45) {
+              // A short stroll around the yard, then back to the block.
+              const a = Math.random() * Math.PI * 2, r = 1.2 + Math.random() * 1.8
+              this.wanderTo.set(this.watchSpot.x + Math.cos(a) * r, 0, Math.max(-4.4, this.watchSpot.z + Math.sin(a) * r))
+              this.wanderPause = 1.5 + Math.random() * 2
+              this.state = 'wander'
+            } else {
+              // Quick breather where he stands, then keep chopping.
+              this.state = 'watch'
+              this.timer = 1.5 + Math.random() * 2
+            }
           }
         }
         break
       }
+      case 'wander':
+        walkTo(this.wanderTo, () => {
+          this.wanderPause -= dt
+          if (this.wanderPause <= 0) {
+            this.state = 'watch'
+            this.timer = 1 + Math.random() * 1.5
+          }
+        })
+        break
       case 'toWatch':
         walkTo(this.watchSpot, () => {
           this.state = 'watch'

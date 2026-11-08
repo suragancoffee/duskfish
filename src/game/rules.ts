@@ -3,7 +3,7 @@
  * lantern brightness, slow-motion pacing and woodpile layout. Unit-tested in tests/rules.test.ts.
  */
 
-export type SpotKind = 'chop' | 'sit' | 'lantern'
+export type SpotKind = 'chop' | 'sit' | 'lantern' | 'greet'
 
 export type Spot = {
   id: string

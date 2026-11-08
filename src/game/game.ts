@@ -7,10 +7,10 @@ import { makeAxe, HEAD_FRACTION } from './axe'
 import { CONFIG } from './config'
 import { cutWoodMaterial, Effects, pieceGeometry, WoodPile } from './fx'
 import {
-  angleDelta, CHOP_DURATION, CHOP_IMPACT, chopTimeScale, lerp, nearestSpot, nextLanternLevel, nightAt,
+  angleDelta, CHOP_DURATION, CHOP_IMPACT, lerp, nearestSpot, nextLanternLevel, nightAt,
   PILE_CAPACITY, pushOutOfCircle, smooth, type LanternLevel, type Spot,
 } from './rules'
-import { Bar, Campfire, CAMPFIRE } from './props'
+import { Bar, BAR, Campfire, CAMPFIRE } from './props'
 import { Shrimp } from './shrimp'
 import { Tuna } from './tuna'
 import { duskEnvironment, LAYOUT, World, type Models } from './world'
@@ -78,6 +78,8 @@ export class Game {
   private shrimpImpacts = 0
   private nightHintShown = false
   private sitHintShown = false
+  /** Set by E (or walking away) during a chop session; the current swing finishes first. */
+  private chopStop = false
   // Chop
   private ct = 0
   private chopFrom = new THREE.Vector3()
@@ -110,6 +112,12 @@ export class Game {
   private readonly guitar: THREE.Group
   private strumT = 0
   private strumKick = 0
+  private sipT = 0
+  private sips = 0
+  private greetT = 0
+  private greetCool = 0
+  private greetIdx = 0
+  private readonly shrimpSpot: Spot = { id: 'shrimp', kind: 'greet', x: 999, z: 999, reach: 1.7 }
   private readonly cutMat = cutWoodMaterial()
   private readonly barkMat: THREE.Material
   private readonly pieceGeo = pieceGeometry(0.15, 0.4)
@@ -170,6 +178,10 @@ export class Game {
     this.seats.push({ id: 'campfire', pos: CAMPFIRE.seat.clone(), rootY: CAMPFIRE.seatTop - 0.02, heading: Math.PI,
       standAt: new THREE.Vector3(CAMPFIRE.seat.x + 1.0, 0, CAMPFIRE.seat.z + 0.45), promptKey: 'prompt.sit.campfire' })
     this.world.spots.push({ id: 'campfire', kind: 'sit', x: CAMPFIRE.seat.x, z: CAMPFIRE.seat.z + 0.25, reach: 1.25 })
+    this.seats.push({ id: 'bar', pos: BAR.stool.clone(), rootY: BAR.stoolTop - 0.02, heading: -Math.PI / 2,
+      standAt: new THREE.Vector3(BAR.stool.x + 0.85, 0, BAR.stool.z + 0.2), promptKey: 'prompt.sit.bar' })
+    this.world.spots.push({ id: 'bar', kind: 'sit', x: BAR.stool.x + 0.35, z: BAR.stool.z, reach: 1.1 })
+    this.world.spots.push(this.shrimpSpot)
     this.guitar = makeGuitar(models.guitar)
     this.guitar.visible = false
     this.tuna.body.add(this.guitar)
@@ -184,6 +196,7 @@ export class Game {
   hud(): HudState {
     let prompt: string | null = null
     if (this.activity === 'sitting') prompt = this.t('prompt.stand')
+    else if (this.activity === 'chop') prompt = this.chopStop ? null : this.t('prompt.chop.stop')
     else if (this.activity === 'free' && this.nearest) prompt = this.promptFor(this.nearest)
     return { wood: this.sessionWood, night: this.night, prompt, sitting: this.activity === 'sitting' || this.activity === 'sitIn', zoneSeconds: this.zoneSession }
   }
@@ -196,6 +209,7 @@ export class Game {
 
   private promptFor(spot: Spot): string {
     if (spot.kind === 'chop') return this.t('prompt.chop')
+    if (spot.kind === 'greet') return this.t('prompt.greet')
     if (spot.kind === 'lantern') return this.t(this.world.lanternLevel === 0 ? 'prompt.lantern.on' : this.world.lanternLevel === 1 ? 'prompt.lantern.up' : 'prompt.lantern.off')
     const seat = this.seats.find(s => s.id === spot.id)
     return this.t(seat?.promptKey ?? 'prompt.sit.rock')
@@ -229,7 +243,6 @@ export class Game {
     const playing = this.mode === 'playing'
     const paused = this.mode === 'paused'
     let scale = 1
-    if (this.activity === 'chop') scale = chopTimeScale(this.ct, CONFIG.world.slowMotion)
     const dt = paused ? 0 : realDt * scale
 
     if (!paused) {
@@ -241,6 +254,10 @@ export class Game {
 
     if (!paused) {
       this.shrimp.update(dt, this.tuna.root.position)
+      const sp = this.shrimp.collider
+      this.shrimpSpot.x = this.shrimp.canGreet && this.greetCool <= 0 ? sp.x : 999
+      this.shrimpSpot.z = sp.z
+      this.greetCool -= dt
       this.world.update(dt, this.night, this.reducedMotion)
       this.updateSmoke(dt)
       this.updateFlyers(dt)
@@ -269,6 +286,7 @@ export class Game {
         this.updateFree(dt, interact)
         break
       case 'chop':
+        if (interact || Math.hypot(this.input.move.x, this.input.move.y) > 0.5) this.chopStop = true
         this.updateChop(dt)
         this.tuna.update(dt, 0, this.reducedMotion)
         break
@@ -324,6 +342,15 @@ export class Game {
       const h = Math.atan2(this.velocity.x, this.velocity.z)
       this.tuna.heading += angleDelta(this.tuna.heading, h) * Math.min(1, dt * CONFIG.player.turnRate)
     }
+    if (this.greetT > 0) {
+      // Face the shrimp and give two slow cowboy nods (the hat dips with the head).
+      this.greetT = Math.max(0, this.greetT - dt)
+      const d = this.shrimp.collider
+      const want = Math.atan2(d.x - pos.x, d.z - pos.z)
+      this.tuna.heading += angleDelta(this.tuna.heading, want) * Math.min(1, dt * 6)
+      const k = 1.6 - this.greetT
+      this.tuna.pitch = k > 0.2 && k < 1.4 ? Math.sin((k - 0.2) * Math.PI * 2 / 1.2) ** 2 * 0.22 : 0
+    }
     this.tuna.update(dt, this.grounded ? sp : 0, this.reducedMotion)
     this.tuna.hips.position.y -= this.land * 0.06
 
@@ -348,7 +375,8 @@ export class Game {
   }
 
   private interact(spot: Spot): void {
-    if (spot.kind === 'chop') this.beginChop()
+    if (spot.kind === 'greet') this.greet()
+    else if (spot.kind === 'chop') this.beginChop()
     else if (spot.kind === 'lantern') {
       const next = nextLanternLevel(this.world.lanternLevel) as LanternLevel
       this.world.setLantern(next)
@@ -361,7 +389,21 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- chopping
+  private greet(): void {
+    if (!this.shrimp.greet()) return
+    this.greetT = 1.6
+    this.greetCool = 3.5
+    this.velocity.set(0, 0, 0)
+    this.audio.play('step', { volume: 0.35, rate: 1.3 })
+    window.setTimeout(() => this.audio.chirp(), 350)
+    const night = this.night > 0.6
+    const n = night ? 6 : 5
+    this.greetIdx = (this.greetIdx + 1 + Math.floor(Math.random() * (n - 1))) % n
+    this.events.toast(night ? `greet.night.${this.greetIdx}` : `greet.dusk.${this.greetIdx}`)
+  }
+
   private beginChop(): void {
+    this.chopStop = false
     this.activity = 'chop'
     this.ct = 0
     this.impactDone = false
@@ -423,9 +465,17 @@ export class Game {
     this.updateHalves()
     this.updateNewLog(dt)
     if (ct >= CHOP_DURATION) {
+      this.chopCount++
+      if (!this.chopStop) {
+        // Keep chopping: next log is already on the stump.
+        this.ct = 0
+        this.impactDone = false
+        this.chopFrom.copy(tuna.root.position)
+        this.chopFromHeading = tuna.heading
+        return
+      }
       this.activity = 'free'
       tuna.pitch = 0
-      this.chopCount++
       if (this.chopCount === 2 && !this.sitHintShown) {
         this.sitHintShown = true
         this.events.hint('hint.sit')
@@ -635,6 +685,14 @@ export class Game {
     this.puffT = 2.5
     this.strumT = -1.2
     this.guitar.visible = seat.id === 'campfire'
+    this.sipT = -1.0
+    if (seat.id === 'bar') {
+      this.sips = 0
+      this.bar.liquid.scale.y = 1
+      this.audio.pour(0.28)
+      window.setTimeout(() => this.audio.clink(0.22), 900)
+      this.events.toast('toast.whisky.pour')
+    }
     this.audio.play('sit', { volume: 0.7 })
     this.events.cinematic(true)
     this.events.hint(null)
@@ -669,6 +727,7 @@ export class Game {
         this.seat = undefined
         this.guitar.visible = false
         this.audio.setMusicDuck(1)
+        this.resetDrink()
         tuna.body.rotation.z = 0
       }
     }
@@ -684,8 +743,9 @@ export class Game {
     this.input.takeLook()
     this.input.takeZoom()
     if (this.seat?.id === 'campfire') this.playGuitar(dt)
+    if (this.seat?.id === 'bar') this.drinkWhisky(dt)
     // Smoke rhythm: inhale (ember brightens), hold, exhale a puff.
-    this.puffT -= this.seat?.id === 'campfire' ? dt * 0.5 : dt
+    this.puffT -= this.seat?.id === 'campfire' || this.seat?.id === 'bar' ? dt * 0.5 : dt
     if (this.puffPhase === 'idle' && this.puffT <= 0) {
       this.puffPhase = 'inhale'
       this.puffT = 1.5
@@ -714,11 +774,58 @@ export class Game {
     if ((interact || moving) && this.sitT > 1.2) {
       this.activity = 'sitOut'
       this.sitT = 0
+      this.resetDrink()
       this.puffPhase = 'idle'
       this.events.cinematic(false)
       this.audio.play('sit', { volume: 0.5, rate: 1.1 })
       this.camYaw = 0.2
     }
+  }
+
+  /**
+   * On the rocks, slowly: lift the glass to the mouth, tip it back, set it down with an ice
+   * clink, then rest a while. Four sips empty it; the tuna pours himself another.
+   */
+  private drinkWhisky(dt: number): void {
+    const CYCLE = 9
+    const prev = this.sipT
+    this.sipT += dt
+    if (this.sipT >= CYCLE) this.sipT -= CYCLE
+    const t = Math.max(0, this.sipT)
+    const g = this.bar.drink
+    const tuna = this.tuna
+    const fwd = tuna.forward(new THREE.Vector3())
+    const mouth = tuna.tipWorld(new THREE.Vector3()).addScaledVector(fwd, -0.02).add(new THREE.Vector3(0, -0.11, 0))
+    let lift = 0, tilt = 0
+    if (t < 1.1) lift = smooth(t / 1.1)
+    else if (t < 2.6) { lift = 1; tilt = Math.sin(((t - 1.1) / 1.5) * Math.PI) }
+    else if (t < 3.6) lift = 1 - smooth((t - 2.6) / 1.0)
+    g.position.lerpVectors(this.bar.drinkRest, mouth, lift)
+    g.position.y += Math.sin(lift * Math.PI) * 0.06
+    const axis = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize()
+    g.quaternion.setFromAxisAngle(axis, -(0.25 * lift + 0.85 * tilt))
+    tuna.pitch = -0.08 - tilt * 0.12
+    // Liquid drains during the tip; set-down clinks the ice.
+    if (tilt > 0) this.bar.liquid.scale.y = Math.max(0.05, this.bar.liquid.scale.y - dt * 0.17)
+    if (prev < 3.6 && this.sipT >= 3.6) {
+      this.audio.clink(0.2)
+      this.sips++
+      if (this.sips >= 4) {
+        this.sips = 0
+        window.setTimeout(() => {
+          if (this.seat?.id !== 'bar') return
+          this.audio.pour(0.26)
+          this.bar.liquid.scale.y = 1
+          this.events.toast('toast.whisky.again')
+        }, 1400)
+      }
+    }
+    if (prev < 1.6 && this.sipT >= 1.6) this.audio.play('puff', { volume: 0.25, rate: 0.7 })
+  }
+
+  private resetDrink(): void {
+    this.bar.drink.position.copy(this.bar.drinkRest)
+    this.bar.drink.quaternion.identity()
   }
 
   /** Western strum: G G C C G G D D Em Em C D, pattern D . D U . U D U at 84 bpm. */
@@ -809,8 +916,16 @@ export class Game {
       const orb = 0.42 + Math.sin(this.elapsed * 0.045) * 0.22
       const d = lerp(2.4, 7.8, pull)
       const sy = s.rootY
-      pos = new THREE.Vector3(s.pos.x + Math.sin(orb) * d, sy + lerp(0.75, 1.35, pull), s.pos.z + Math.cos(orb) * d)
-      look = new THREE.Vector3(s.pos.x - Math.sin(orb) * 2.5, sy + lerp(0.7, 2.2, pull), s.pos.z - 7)
+      if (s.id === 'campfire') {
+        // Front three-quarter view across the fire so the guitar on his chest is visible.
+        const a = 0.62 + Math.sin(this.elapsed * 0.05) * 0.15
+        const dc = lerp(2.0, 3.4, pull)
+        pos = new THREE.Vector3(s.pos.x + Math.sin(a) * dc, sy + lerp(0.55, 1.0, pull), s.pos.z - Math.cos(a) * dc)
+        look = new THREE.Vector3(s.pos.x, sy + lerp(0.4, 0.55, pull), s.pos.z - 0.3)
+      } else {
+        pos = new THREE.Vector3(s.pos.x + Math.sin(orb) * d, sy + lerp(0.75, 1.35, pull), s.pos.z + Math.cos(orb) * d)
+        look = new THREE.Vector3(s.pos.x - Math.sin(orb) * 2.5, sy + lerp(0.7, 2.2, pull), s.pos.z - 7)
+      }
       fov = lerp(44, 40, pull)
       rate = this.activity === 'sitIn' ? 2.5 : 1.2
     } else {
@@ -863,7 +978,8 @@ function ringTexture(): THREE.Texture {
   return rings
 }
 
-const GUITAR_REST = { x: 0.4, y: -0.02, z: 0.08, rx: -0.55, ry: 0, rz: 0 }
+/** Held in front of the chest: neck across to the side and slightly up, soundboard facing forward. */
+const GUITAR_REST = { x: 0.08, y: -0.15, z: 0.36, rx: 0, ry: Math.PI / 2, rz: 0.3 }
 
 /**
  * Guitar held against the tuna's flank (the side facing the camera when seated): neck along
@@ -886,7 +1002,7 @@ function makeGuitar(gltf: { scene: THREE.Object3D }): THREE.Group {
   wrap.add(src)
   wrap.updateMatrixWorld(true)
   const sz = new THREE.Box3().setFromObject(wrap).getSize(new THREE.Vector3())
-  src.scale.multiplyScalar(0.82 / Math.max(sz.x, sz.y, sz.z))
+  src.scale.multiplyScalar(0.7 / Math.max(sz.x, sz.y, sz.z))
   wrap.updateMatrixWorld(true)
   // Body (wide end) toward the tail: put the centre of mass behind the holder origin.
   const box = new THREE.Box3().setFromObject(wrap)
@@ -911,6 +1027,6 @@ function makeGuitar(gltf: { scene: THREE.Object3D }): THREE.Group {
   const holder = new THREE.Group()
   holder.add(wrap)
   holder.position.set(GUITAR_REST.x, GUITAR_REST.y, GUITAR_REST.z)
-  holder.rotation.set(GUITAR_REST.rx, GUITAR_REST.ry, GUITAR_REST.rz)
+  holder.rotation.set(GUITAR_REST.rx, GUITAR_REST.ry, GUITAR_REST.rz, 'ZYX')
   return holder
 }

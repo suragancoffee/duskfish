@@ -12,10 +12,13 @@ export const CAMPFIRE = {
 
 export const BAR = {
   /** Counter centre; it runs along Z with the customer side facing +X. */
-  pos: new THREE.Vector3(-6.4, 0, -1.6),
+  pos: new THREE.Vector3(-8.0, 0, -2.6),
   length: 2.8,
   height: 1.08,
   depth: 0.6,
+  /** Stool the tuna sits on, on the customer side; it faces the counter (-X). */
+  stool: new THREE.Vector3(-8.0 + 0.3 + 0.62, 0, -2.6 + 0.35),
+  stoolTop: 0.74,
 }
 
 const FLAME_FRAG = `varying float vAlpha; varying float vSeed;
@@ -137,6 +140,10 @@ function woodTexture(base: string, dark: string, planks: number, vertical = fals
 export class Bar {
   readonly group = new THREE.Group()
   readonly candle: THREE.PointLight
+  /** On-the-rocks glass the tuna drinks from; rests on the counter in front of the stool. */
+  readonly drink = new THREE.Group()
+  readonly drinkRest: THREE.Vector3
+  readonly liquid: THREE.Mesh
 
   constructor(colliders: Collider[]) {
     const b = BAR
@@ -210,6 +217,37 @@ export class Bar {
     candleMesh.castShadow = false
     const flame = add(new THREE.SphereGeometry(0.012, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 2, 0.6) }), 0.05, b.height + 0.1, 1.0)
     flame.scale.y = 1.8
+    // Bar stool: round seat, one post, a foot ring and a base (4 draw calls).
+    const st = b.stool
+    const stoolSeat = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.19, 0.07, 18), top)
+    stoolSeat.position.set(st.x, b.stoolTop - 0.035, st.z)
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, b.stoolTop - 0.07, 10), dark)
+    post.position.set(st.x, (b.stoolTop - 0.07) / 2, st.z)
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.012, 6, 20), brass)
+    ring.rotation.x = Math.PI / 2
+    ring.position.set(st.x, 0.28, st.z)
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.04, 18), dark)
+    base.position.set(st.x, 0.02, st.z)
+    for (const m of [stoolSeat, post, ring, base]) {
+      m.castShadow = true
+      m.receiveShadow = true
+      this.group.add(m)
+    }
+    colliders.push({ x: st.x, z: st.z, r: 0.2 })
+    // Rocks glass: heavy base, amber whisky and one big ice cube.
+    const rocks = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.042, 0], [0.044, 0.085], [0.04, 0.085], [0.038, 0.016], [0, 0.016]].map(([x, y]) => new THREE.Vector2(x, y)), 18),
+      new THREE.MeshStandardMaterial({ color: 0xe6f0f0, roughness: 0.04, transparent: true, opacity: 0.32, depthWrite: false }))
+    this.liquid = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.045, 16),
+      new THREE.MeshStandardMaterial({ color: 0xb8620f, roughness: 0.15, transparent: true, opacity: 0.85, emissive: 0x5a2400, emissiveIntensity: 0.35 }))
+    this.liquid.geometry.translate(0, 0.0225, 0)
+    this.liquid.position.y = 0.017
+    const ice = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.038, 0.038), new THREE.MeshStandardMaterial({ color: 0xf4fbff, roughness: 0.1, transparent: true, opacity: 0.55 }))
+    ice.position.y = 0.05
+    ice.rotation.set(0.3, 0.5, 0.2)
+    this.drink.add(rocks, this.liquid, ice)
+    this.drinkRest = new THREE.Vector3(b.pos.x + b.depth / 2 - 0.04, b.height, st.z)
+    this.drink.position.copy(this.drinkRest)
+    this.group.add(this.drink)
     this.candle = new THREE.PointLight(0xffa050, 1.2, 4.5, 1.6)
     this.candle.position.set(b.pos.x + 0.05, b.height + 0.2, b.pos.z + 1.0)
     this.group.add(this.candle)
