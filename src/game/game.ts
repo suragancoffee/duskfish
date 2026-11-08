@@ -795,7 +795,7 @@ export class Game {
     const g = this.bar.drink
     const tuna = this.tuna
     const fwd = tuna.forward(new THREE.Vector3())
-    const mouth = tuna.tipWorld(new THREE.Vector3()).addScaledVector(fwd, -0.02).add(new THREE.Vector3(0, -0.11, 0))
+    const mouth = tuna.glassAtMouthWorld(new THREE.Vector3())
     let lift = 0, tilt = 0
     if (t < 1.1) lift = smooth(t / 1.1)
     else if (t < 2.6) { lift = 1; tilt = Math.sin(((t - 1.1) / 1.5) * Math.PI) }
@@ -979,7 +979,7 @@ function ringTexture(): THREE.Texture {
 }
 
 /** Held in front of the chest: neck across to the side and slightly up, soundboard facing forward. */
-const GUITAR_REST = { x: 0.08, y: -0.15, z: 0.36, rx: 0, ry: Math.PI / 2, rz: 0.3 }
+const GUITAR_REST = { x: -0.08, y: -0.15, z: 0.36, rx: 0, ry: -Math.PI / 2, rz: -0.3 }
 
 /**
  * Guitar held against the tuna's flank (the side facing the camera when seated): neck along

@@ -138,6 +138,11 @@ export class Tuna {
     return out.set(Math.sin(this.heading), 0, Math.cos(this.heading))
   }
 
+  /** Where a glass base should sit so its rim meets the lips (just below and ahead of the mouth). */
+  glassAtMouthWorld(out = new THREE.Vector3()): THREE.Vector3 {
+    this.body.updateMatrixWorld(true)
+    return out.set(0.01, -0.115, 0.625).applyMatrix4(this.body.matrixWorld)
+  }
   tipWorld(out = new THREE.Vector3()): THREE.Vector3 {
     this.root.updateMatrixWorld(true)
     return out.copy(this.tipLocal).applyMatrix4(this.body.matrixWorld)
