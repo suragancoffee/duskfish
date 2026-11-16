@@ -1,9 +1,12 @@
-[황혼의 카우보이 참치.md](https://github.com/user-attachments/files/34910413/default.md)
 # 황혼의 카우보이 참치
 
 해질녘 서부 시골 쉼터에서 카우보이 모자를 쓴 참치와 새우 동료가 장작을 패고, 모닥불 앞에서 기타를 치고, 작은 바에서 위스키를 마시며 노을과 별을 바라보는 3D Lo-Fi 힐링 웹게임입니다.
 
 점수 경쟁이나 게임 오버, 시간 제한 없이 천천히 주변을 둘러보고 다양한 상호작용을 즐길 수 있습니다.
+
+### ▶ [바로 플레이하기](https://suragancoffee.github.io/duskfish/)
+
+설치 없이 브라우저에서 바로 실행됩니다. WebGL을 지원하는 최신 데스크톱·모바일 브라우저를 권장합니다.
 
 ## 기술 스택
 
@@ -81,14 +84,27 @@ pnpm smoke     # 헤드리스 브라우저 스모크 테스트
 | `src/engine/renderer.ts` | Three.js WebGL 렌더러와 후처리 |
 | `src/ui/` | HUD, 메뉴, 상호작용 안내와 터치 UI |
 | `src/styles/main.css` | 게임 화면과 UI 스타일 |
-| `assets/models/` | 게임에 사용되는 3D 모델 |
-| `assets/audio/` | 배경음과 효과음 |
+| `public/assets/models/` | 게임에 사용되는 3D 모델 (`.glb`) |
+| `public/assets/audio/` | 배경음과 효과음 (`.mp3`) |
+| `.github/workflows/deploy-pages.yml` | GitHub Pages 자동 배포 워크플로 |
 
 ## 애셋과 저장 데이터
 
-3D 모델과 오디오 파일은 게임 분위기에 맞춰 준비한 프로젝트 애셋입니다. Webdev 애셋 동기화 파일인 `assets.lock.json`을 함께 사용해 빌드와 복구 시 동일한 애셋을 유지합니다.
+3D 모델 11개와 오디오 파일 8개는 저장소의 `public/assets/`에 포함되어 있으며, 빌드 시 그대로 `dist/assets/`로 복사됩니다. 게임은 이 파일들을 상대경로(`./assets/...`)로 불러오므로 외부 스토리지 없이 어떤 정적 호스팅에서도 동작합니다.
+
+`assets.lock.json`은 사용 가능한 애셋 목록과 각 파일의 sha256 해시를 기록한 레지스트리입니다. 새 애셋을 추가할 때는 `public/assets/`에 파일을 넣고 이 목록에도 등록해야 합니다.
 
 게임 설정과 진행 정보는 브라우저의 로컬 저장 공간에 저장됩니다. 온라인 멀티플레이나 계정, 순위 경쟁 기능은 사용하지 않습니다.
+
+## 배포
+
+GitHub Pages로 자동 배포됩니다.
+
+1. `main` 브랜치에 push하면 `.github/workflows/deploy-pages.yml`이 실행됩니다.
+2. 워크플로가 `pnpm install` → `pnpm build`로 `dist/`를 만들고 GitHub Pages에 업로드합니다.
+3. 1~2분 뒤 https://suragancoffee.github.io/duskfish/ 에 반영됩니다.
+
+Vite 설정의 `base: './'` 덕분에 저장소 이름 하위 경로에서도 그대로 동작합니다. 배포 상태는 저장소의 **Actions** 탭에서 확인할 수 있습니다.
 
 ## 공유 정보
 
@@ -96,8 +112,9 @@ pnpm smoke     # 헤드리스 브라우저 스모크 테스트
 - 장르: 3D 초현실적 서부 Lo-Fi 힐링 시뮬레이션
 - 플레이 방식: 오프라인 싱글플레이
 - 언어: 한국어
+- 플레이 주소: https://suragancoffee.github.io/duskfish/
 
-공유용 제목과 설명은 `game-sharing.json`에 관리하며, 게임 전용 파비콘은 `assets/share/`에 보관합니다.
+게임 파비콘은 `public/favicon.svg`에 있습니다.
 
 ## 라이선스와 크레딧
 
