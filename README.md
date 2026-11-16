@@ -1,95 +1,104 @@
-# game-3d starter (three.js + Rapier)
+[황혼의 카우보이 참치.md](https://github.com/user-attachments/files/34910413/default.md)
+# 황혼의 카우보이 참치
 
-A complete, small 3D game — **Sky Cores**: run, jump and dash across floating islands to collect
-every energy core before the clock runs out, avoiding patrol drones. It exists to be *changed*:
-the engine layer is fixed scaffolding, the game layer is the part you rewrite.
+해질녘 서부 시골 쉼터에서 카우보이 모자를 쓴 참치와 새우 동료가 장작을 패고, 모닥불 앞에서 기타를 치고, 작은 바에서 위스키를 마시며 노을과 별을 바라보는 3D Lo-Fi 힐링 웹게임입니다.
+
+점수 경쟁이나 게임 오버, 시간 제한 없이 천천히 주변을 둘러보고 다양한 상호작용을 즐길 수 있습니다.
+
+## 기술 스택
+
+- Three.js 기반 브라우저 3D 게임
+- TypeScript
+- Vite
+- WebGL
+- 로컬 싱글플레이
+- 데스크톱 키보드·마우스 및 터치 조작 지원
+
+## 실행 방법
 
 ```bash
 pnpm install
-pnpm dev      # http://localhost:5173
-pnpm build    # typecheck + production build + JS/font budgets + total-size report
-pnpm test     # unit tests (rules, save, i18n, level)
-pnpm smoke    # after build: headless browser playthrough + screenshots in shots/
+pnpm dev       # 개발 서버 실행
+pnpm build     # 타입 검사 및 프로덕션 빌드
+pnpm test      # 단위 테스트 실행
+pnpm smoke     # 헤드리스 브라우저 스모크 테스트
 ```
 
-## Layout
+개발 서버의 기본 주소는 `http://localhost:3000`입니다.
 
-| Path | Role | Change it? |
-| --- | --- | --- |
-| `src/engine/loop.ts` | Fixed 60 Hz simulation + interpolated rendering | Rarely |
-| `src/engine/input.ts` | Keyboard/mouse, gamepad, touch → one action state | Add actions here |
-| `src/engine/physics.ts` | Rapier world, collider helpers, render interpolation | Rarely |
-| `src/engine/renderer.ts` | WebGL renderer, quality presets, bloom | Rarely |
-| `src/engine/audio.ts` | Music/SFX buses, synthesized SFX, `load()` for files | Add sounds |
-| `src/engine/save.ts` | Versioned localStorage save + leaderboard | Add fields + parsing |
-| `src/engine/i18n.ts` | en / zh-CN, browser detection, saved choice wins | Rarely |
-| `src/engine/assets.ts` | Cached GLTF/texture loading with progress | Use it for models |
-| `src/game/config.ts` | Source defaults and active gameplay configuration | Yes |
-| `src/game/tuning.ts` | Tweak catalog, atomic validation and activation boundaries | Yes |
-| `src/game/rules.ts` | Pure score/lives/clock/win rules (unit tested) | Yes |
-| `src/game/world.ts` | Level layout, sky, lights, islands, stones, lifts | Yes |
-| `src/game/player.ts` | Character controller + game feel + procedural model | Yes |
-| `src/game/*.ts` | Camera, cores, drones, particles, scene orchestration | Yes |
-| `src/ui/`, `src/styles/main.css` | HTML/CSS title, HUD, pause, settings, results | Yes |
-| `src/i18n/*.json` | All player-facing text (both files, same keys) | Yes |
+## 게임 조작
 
-## Rules for changes
+### 키보드와 마우스
 
-- **Simulation in `step()`, visuals in `render()`/`animate()`.** Gameplay state only changes in
-  fixed steps; read presses there with `input.consume(action)`, never `pressed()`.
-- **Rules stay pure.** Scoring, win/lose and progression go in `rules.ts` with tests; scene code
-  reports events and reads state.
-- **Every visible string is an i18n key** in both `en.json` and `zh-CN.json` (a test enforces
-  matching keys and placeholders). English and Chinese use the bundled Manus CC0 fonts in `public/fonts/`;
-  if you add new Chinese text, check it renders (missing glyphs fall back to system fonts).
-- **UI is HTML/CSS**, not canvas. Keep the game look: display font, outlined text, hard offset
-  shadows, skewed buttons, notched panels. Menus must stay keyboard/gamepad navigable
-  (`data-nav` on focusable controls).
-- **Colliders come from the helpers** in `physics.ts` with the same sizes as the meshes.
-- Keep `npm run build` within the JS/font budgets (`scripts/check-size.mjs`) and `npm run smoke` green.
-  Total game asset size is reported without a hard limit.
+| 입력 | 동작 |
+| --- | --- |
+| `WASD` / 방향키 | 참치 이동 |
+| `Shift` | 빠르게 걷기 |
+| `Space` | 점프 |
+| `E` | 가까운 대상과 상호작용 |
+| 마우스 드래그 | 카메라 시점 회전 |
+| 마우스 휠 | 카메라 줌 |
+| `Esc` | 메뉴 열기 |
 
-## Controls
+상호작용 중에도 마우스 드래그로 시점을 자유롭게 바꿀 수 있습니다. 장작을 팰 때는 그루터기를 중심으로, 앉아 있을 때는 참치를 중심으로 카메라가 회전합니다.
 
-Keyboard/mouse: WASD move, mouse look (click to capture), Space jump (hold = higher), Shift
-sprint, F or left click dash, Esc pause. Gamepad: left stick, right stick, A jump, X/RB dash,
-LB sprint, Start pause. Touch: left-side stick, right-side drag to look, JUMP / DASH buttons.
+### 터치
 
-## Credits
+터치 화면에서는 화면에 표시되는 이동 스틱과 상호작용 버튼을 사용합니다. 화면을 드래그해 시점을 바꾸고 핀치 또는 줌 제스처로 거리를 조절할 수 있습니다.
 
-Fonts: ManusCC0 (regular, medium, bold) and ManusCC0 Sans CJK SC — CC0 1.0.
-The bundled Chinese font preserves its 6,547-codepoint repertoire; no font download is required.
-See `public/fonts/ManusCC0-LICENSE.txt`.
-Libraries: three.js (MIT), Rapier (Apache-2.0).
+## 주요 상호작용
 
-## Preview Tweak
+- **장작 패기:** 그루터기와 도끼 가까이에서 `E`를 누르면 장작을 쪼갭니다. 도끼 타격음, 장작 파편, 연기와 장작더미 쌓기 효과가 재생됩니다.
+- **멍때리기:** 바위나 울타리 근처에서 `E`를 누르면 참치가 앉아 담배를 피우며 노을을 바라봅니다. 담배 불빛과 연기가 은은하게 움직이고 카메라가 시네마틱하게 줌아웃됩니다.
+- **랜턴:** 빈티지 오일 랜턴을 켜고 끌 수 있습니다. 밤이 깊어질수록 주변이 어두워지고 랜턴의 따뜻한 빛이 더 돋보입니다.
+- **모닥불:** 모닥불 앞에 앉아 기타를 연주할 수 있습니다. 장작을 모닥불에 넣으면 불꽃과 빛, 모닥불 소리가 커집니다.
+- **서부 바:** 바 의자에 앉아 온더락잔에 담긴 위스키를 마실 수 있습니다. 잔을 참치의 입 쪽으로 가져가 기울이는 동작이 포함되어 있습니다.
+- **새우와 인사:** 새우 가까이에서 `E`를 누르면 간단한 인사 상호작용이 시작됩니다.
+- **새우의 생활:** 새우는 주변에서 장작을 패거나 구경합니다. 때때로 바 의자에 앉아 건배하고, 참치가 기타를 연주하면 곁에서 춤을 춥니다.
 
-`src/game/tuning.ts` is this game's parameter manager. The Addon panel reads its
-catalog; `config.ts` owns source defaults and the active configuration used by gameplay.
-When adapting the game, keep only controls with actual gameplay consumers, and preserve
-stable IDs for unchanged parameters. Define ranges, units and the correct activation
-boundary. Register through `scripts/manus-tuning/adapter.js` only under `import.meta.env.DEV`.
-Keep the Vite plugin and `scripts/__manus__/` helpers intact; production builds exclude
-the browser adapter and never inject the bridge.
+## 분위기 시스템
 
-Apply changes preview state only. `LIVE` parameters are read in the next game update;
-`NEXT_ACTION` parameters activate at the relevant jump/dash start; `NEXT_RUN` parameters
-activate in `Game.start`. Model/collider size and gravity are not exposed by this version.
-Do not mutate the source defaults or persist Apply to localStorage. Save with Manus
-checks the snapshot against the current catalog and edits `DEFAULT_CONFIG`, then uses
-the normal Three.js Web build/checkpoint workflow. Keep existing gameplay parameter
-managers when extending an older project; do not create a competing store.
+- 시간에 따라 해질녘에서 깊은 밤으로 자연스럽게 전환됩니다.
+- 밤이 깊어질수록 별과 반딧불이가 늘어납니다.
+- 랜턴과 모닥불은 따뜻한 색의 조명과 주변광을 만듭니다.
+- 서부풍 어쿠스틱 기타와 Lo-Fi 풀벌레 소리가 배경을 채웁니다.
+- 장작 타격, 발걸음, 랜턴, 모닥불, 담배, 기타, 위스키 등 상황별 효과음이 재생됩니다.
 
-For server-authoritative multiplayer, expose local cosmetic controls only until gameplay
-parameters have explicit server-side development support. The descriptor's GAMEPLAY flag
-is a classification, not server authorization or ranked-score enforcement.
+## 프로젝트 구조
 
-The preview plugin reads the ignored `.manus-webdev/preview-identity.json` v1 projection
-written by the Runtime when initializing, attaching or restoring this project. It contains
-only the resource ID and canonical project directory; private Host bindings and starter
-receipts are not template dependencies. Missing identity disables the bridge.
-The manager latches `tuning.unranked` when non-default GAMEPLAY values become active and
-resets it only at the next run using that run's active values. `Game` snapshots this onto
-`RunState.unranked`; local results cannot save such runs. Preserve this guard when changing
-scoring. When adding online leaderboards, skip submissions for unranked runs and enforce
-eligibility in the authoritative server too; client flags are not proof of a fair score.
+| 경로 | 설명 |
+| --- | --- |
+| `src/main.ts` | 게임 진입점과 초기화 |
+| `src/game/game.ts` | 게임 상태, 업데이트 루프, 상호작용 오케스트레이션 |
+| `src/game/world.ts` | 하늘, 지형, 풀, 언덕, 나무, 울타리와 배경 배치 |
+| `src/game/tuna.ts` | 카우보이 참치 캐릭터와 담배·모자·부츠 연출 |
+| `src/game/shrimp.ts` | 새우 동료의 이동과 절차적 행동 연출 |
+| `src/game/props.ts` | 모닥불, 바, 의자, 잔과 주변 소품 |
+| `src/game/axe.ts` | 도끼 피벗과 장작 패기 연출 |
+| `src/game/fx.ts` | 연기, 불꽃, 반딧불이, 파편 등 파티클 효과 |
+| `src/engine/input.ts` | 키보드, 마우스, 게임패드와 터치 입력 |
+| `src/engine/audio.ts` | 배경음과 효과음 재생 및 합성 |
+| `src/engine/renderer.ts` | Three.js WebGL 렌더러와 후처리 |
+| `src/ui/` | HUD, 메뉴, 상호작용 안내와 터치 UI |
+| `src/styles/main.css` | 게임 화면과 UI 스타일 |
+| `assets/models/` | 게임에 사용되는 3D 모델 |
+| `assets/audio/` | 배경음과 효과음 |
+
+## 애셋과 저장 데이터
+
+3D 모델과 오디오 파일은 게임 분위기에 맞춰 준비한 프로젝트 애셋입니다. Webdev 애셋 동기화 파일인 `assets.lock.json`을 함께 사용해 빌드와 복구 시 동일한 애셋을 유지합니다.
+
+게임 설정과 진행 정보는 브라우저의 로컬 저장 공간에 저장됩니다. 온라인 멀티플레이나 계정, 순위 경쟁 기능은 사용하지 않습니다.
+
+## 공유 정보
+
+- 게임 제목: **황혼의 카우보이 참치**
+- 장르: 3D 초현실적 서부 Lo-Fi 힐링 시뮬레이션
+- 플레이 방식: 오프라인 싱글플레이
+- 언어: 한국어
+
+공유용 제목과 설명은 `game-sharing.json`에 관리하며, 게임 전용 파비콘은 `assets/share/`에 보관합니다.
+
+## 라이선스와 크레딧
+
+게임에 포함된 오픈소스 라이브러리와 폰트의 라이선스 정보는 각 애셋의 라이선스 파일과 프로젝트 설정을 따릅니다. Three.js는 MIT 라이선스, Rapier는 Apache-2.0 라이선스를 사용합니다.
