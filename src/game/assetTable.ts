@@ -1,15 +1,16 @@
 import lock from '../../assets.lock.json'
 
 /**
- * Runtime media lives in project Storage/CDN. The lock file maps each source path to its stable
- * `/manus-storage/...` address; the build keeps these complete paths so CDN loads stay exact.
+ * Runtime media ships with the site under `public/assets/` (copied to `dist/assets/` by Vite).
+ * The lock file is kept as the registry of known assets; URLs are relative so the game works
+ * from a sub-path such as GitHub Pages (`/<repo>/`).
  */
 const entries = (lock as { assets: Record<string, { path: string }> }).assets
 
 export function assetUrl(rel: string): string {
   const entry = entries[rel]
   if (!entry) throw new Error(`Unregistered asset: ${rel}`)
-  return entry.path
+  return `./${rel}`
 }
 
 export const MODELS = {
